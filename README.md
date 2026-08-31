@@ -80,7 +80,7 @@ from kicad_netspec import Spec, net, polarity, forbid
 board = Spec(
     source="hardware/board.kicad_sch",
     rules=[
-        net("VIN",  ["J1.1", "C1.1", "U1.VI"]),
+        net("VIN", ["J1.1", "C1.1", "U1.VI"]),
         net("+3V3", ["U1.VO", "C2.1"]),
         polarity("C1", plus="VIN", minus="GND"),
         forbid("VIN", "GND"),
