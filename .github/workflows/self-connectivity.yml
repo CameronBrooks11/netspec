@@ -24,13 +24,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The published package is not what we want to test here -- the checkout is.
-      - name: Use this checkout, not a release
-        shell: bash
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          python3 -m pip install --quiet --disable-pip-version-check -e .
-
+      # netspec-version below points the action's own installer at this checkout, so
+      # the code under test is what runs -- not a release.
       - uses: ./
         with:
           schematic: |

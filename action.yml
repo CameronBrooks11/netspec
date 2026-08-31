@@ -67,7 +67,34 @@ runs:
   steps:
     - name: Install netspec
       shell: bash
-      run: python3 -m pip install --quiet --disable-pip-version-check ${{ inputs.netspec-version }}
+      env:
+        NETSPEC_SPEC: ${{ inputs.netspec-version }}
+      run: |
+        set -e
+        # KiCad CI images are minimal: ghcr.io/inti-cmnb/kicad10_auto ships Python 3.13
+        # with no pip, no pip3, no pipx, no uv -- and no curl or wget to fetch one.
+        # It is Debian, so bootstrap pip from the distro.
+        if ! python3 -m pip --version >/dev/null 2>&1; then
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -qq && apt-get install -y -qq python3-pip
+          else
+            echo "::error::no pip, and no apt-get to install one" && exit 1
+          fi
+        fi
+        # A distro Python is marked externally managed (PEP 668). Adding one
+        # dependency-free package to a throwaway CI container is safe, so fall back to
+        # overriding it rather than failing.
+        # shellcheck disable=SC2086
+        python3 -m pip install --quiet --disable-pip-version-check \
+            --root-user-action=ignore $NETSPEC_SPEC \
+          || python3 -m pip install --quiet --disable-pip-version-check \
+            --root-user-action=ignore --break-system-packages $NETSPEC_SPEC
+
+    - name: Trust the checkout
+      shell: bash
+      # Reading the base revision uses a git worktree, and a checkout made by a
+      # different uid inside a container trips git's ownership check.
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
 
     - name: Compare connectivity
       id: run
