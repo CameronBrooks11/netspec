@@ -1,0 +1,39 @@
+name: Self-connectivity
+
+# netspec runs its own Action against its own fixtures, so the Action is exercised on
+# every pull request that touches them. It is also the honest way to demonstrate the
+# tool: dogfooding on a repo we own, rather than on someone's real board.
+
+on:
+  pull_request:
+    paths:
+      - "tests/fixtures/**"
+      - "src/kicad_netspec/**"
+      - "action.yml"
+      - ".github/workflows/self-connectivity.yml"
+
+jobs:
+  connectivity:
+    runs-on: ubuntu-latest
+    container: ghcr.io/inti-cmnb/kicad10_auto:latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The published package is not what we want to test here -- the checkout is.
+      - name: Use this checkout, not a release
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python3 -m pip install --quiet --disable-pip-version-check -e .
+
+      - uses: ./
+        with:
+          schematic: |
+            tests/fixtures/good_ldo.kicad_sch
+            tests/fixtures/polcap_rail_correct.kicad_sch
+          netspec-version: "-e ."
