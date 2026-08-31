@@ -113,9 +113,16 @@ jobs:
 
       # SHA-pinned, not `@release/v1`. This is the one action holding the OIDC identity
       # for PyPI, and a branch ref is mutable — its contents can change between one
-      # release and the next. Pin below is v1.12.4; bump it deliberately, with the
+      # release and the next. Pin below is v1.14.2; bump it deliberately, with the
       # version in the comment.
-      - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
+      #
+      # Keep it CURRENT, not merely pinned. This action bundles its own twine, and an
+      # old one rejects new metadata: v1.12.4 failed the first 0.5.0 attempt with
+      # `InvalidDistribution: '2.5' is not a valid metadata version`, because hatchling
+      # emits Metadata-Version 2.5 for a PEP 639 SPDX license. The `twine check` in the
+      # build job did NOT catch it — uvx fetches a current twine, so the build verified
+      # against a newer parser than the one that actually gates the upload.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
 
   major-tag:
     # Consumers write `uses: CameronBrooks11/netspec@v0`, which is the convention for
