@@ -210,6 +210,26 @@ heuristics are now anchored.
 **The lesson worth keeping:** this class of judgement cannot be designed from first
 principles, only measured against designs you did not write.
 
+## D16 — The Action bootstraps pip, because KiCad CI images do not ship it
+
+`ghcr.io/inti-cmnb/kicad10_auto` — the natural place to run this, and the family KiBot
+users already run — ships Python 3.13 with **no pip, no pip3, no pipx and no uv**, and
+no `curl` or `wget` to fetch one. `ensurepip` is absent too, so `python3 -m venv` cannot
+bootstrap. Probed directly against the image rather than inferred.
+
+The image is Debian, so the action installs `python3-pip` from apt (~20 s) when pip is
+missing. The distro Python is additionally marked externally managed (PEP 668), so a
+plain install refuses; adding one dependency-free package to a throwaway CI container is
+safe, and the install falls back to `--break-system-packages` rather than failing.
+
+The action also marks the workspace a safe directory: reading the base revision uses a
+git worktree, and a checkout made by a different uid inside a container trips git's
+ownership check.
+
+This is the kind of thing that is only discoverable by running it. Verified end to end
+inside the real image, which is also the first confirmation that netspec works against a
+**native** `kicad-cli` rather than a Flatpak-wrapped one.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical
