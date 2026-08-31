@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 import pytest
 
-pytest.importorskip("mcp", reason="needs the mcp extra")
+# Skipping is right for a contributor without the extra, and wrong for CI: this whole
+# module skipped silently there once, so the MCP surface had no coverage while the run
+# reported green. In CI a missing extra is a failure, not a skip.
+if os.environ.get("CI"):
+    import mcp  # noqa: F401  -- fail loudly if the extra is not installed
+else:
+    pytest.importorskip("mcp", reason="needs the mcp extra; run `just setup`")
 
 from kicad_netspec.mcp import build_server, run_cli, tool_schema_size  # noqa: E402
 
