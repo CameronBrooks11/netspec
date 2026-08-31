@@ -172,9 +172,15 @@ on KiCad's defaults for the parity rules.
 so that the IPC backend stays one file.
 
 ``guard`` has to run an arbitrary command the user names -- an agent, a build script, a
-generator -- and that is not KiCad leaking in. The rule is narrowed to name an explicit
-exemption, ``ops/run.py``, which may spawn a process but must never invoke a KiCad
-binary. Widening the exemption list is a design change and should be argued for here.
+generator -- and that is not KiCad leaking in. The rule is narrowed to name explicit
+exemptions, which may spawn a process but must never invoke a KiCad binary. Widening the
+list is a design change and is argued for here:
+
+* ``ops/run.py`` — runs the command ``guard`` was pointed at.
+* ``mcp.py`` — runs the netspec CLI, one process per call (D18). It does not reach the
+  oracle directly and names no KiCad binary; KiCad is still reached only through
+  ``oracle/``, one process further down. The test that caught this addition is the
+  reason the exemption is a list rather than a blanket allowance.
 
 ## D15 — A pin swap's significance comes from the part, not the topology
 
@@ -283,6 +289,34 @@ environment.
 Version note: tags `v0.2.0`–`v0.4.1` were cut while `pyproject` still said `0.0.1`, so
 they claimed versions the package never declared. `0.5.0` is the first version where the
 two agree, and the gate above now prevents a recurrence.
+
+## D18 — The MCP server is stateless verbs, and does not expose `guard`
+
+Six tools — ``doctor``, ``netlist``, ``snapshot``, ``diff``, ``check``, ``gate`` — each
+a fresh read of a design on disk. Nothing is held between calls.
+
+**A process per call, not an in-process call.** Two reasons, both load-bearing:
+
+* ``check`` imports a contract module and ``sys.modules`` caches it, so a long-lived
+  server re-checking an edited contract could adjudicate the *previous* version while
+  reporting on the new one. A stale answer presented as fresh is the exact failure this
+  project exists to catch; it would be indefensible to ship it in the tool that catches
+  it.
+* The exit code is part of the contract — ``0`` clean, ``1`` a finding about the design,
+  ``4`` an environment fault. A subprocess returns the CLI's own, unlaundered, and each
+  reply carries a plain-language ``meaning`` so an agent cannot mistake "I could not
+  look" for "your board is broken".
+
+**``guard`` is deliberately absent.** It runs an arbitrary command. An agent driving this
+server can already run commands, so exposing it would add risk and no capability; the
+agent should make its edit and then call ``diff``. A test asserts it stays absent, along
+with the absence of any tool whose name implies writing to a design.
+
+**The tool list has a budget: under 3,000 tokens, asserted in CI.** The survey behind this
+project measured KiCad MCP servers from 2,574 to 48,627 tokens of schema — the largest
+spending a quarter of a 200K window before the agent reads a file. netspec's six tools
+measure ~834 tokens on the wire. Tool surface is a cost paid by every agent that
+connects, and a number in CI is the only thing that keeps it from creeping.
 
 ## D14 — Name: `netspec`
 
