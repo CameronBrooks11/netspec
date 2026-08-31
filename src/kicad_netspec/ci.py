@@ -93,6 +93,7 @@ def _one(
         )
     elif result.empty:
         body.append("Connectivity unchanged.")
+        body.append("")
     else:
         body.append(_render_diff(result))
 
