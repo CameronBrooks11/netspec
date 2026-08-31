@@ -17,10 +17,12 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from kicad_netspec import __version__, snapshot
+from kicad_netspec import __version__, contract, snapshot
+from kicad_netspec.check import CheckReport, check_spec
 from kicad_netspec.diff import NetlistDiff, diff_netlists
 from kicad_netspec.model import Netlist
-from kicad_netspec.oracle import Cli10Backend, EnvironmentError_, find_kicad_cli
+from kicad_netspec.ops.guard import guard as run_guard
+from kicad_netspec.oracle import Cli10Backend, EnvironmentError_, RuleReport, find_kicad_cli
 
 EXIT_OK = 0
 EXIT_VIOLATION = 1
@@ -29,8 +31,18 @@ EXIT_ENVIRONMENT = 4
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # Everything after the first bare `--` is the command `guard` should run. Split it
+    # off before argparse sees it: argparse.REMAINDER would otherwise swallow any flag
+    # that happens to follow the positional argument.
+    trailing: list[str] = []
+    if "--" in raw:
+        cut = raw.index("--")
+        raw, trailing = raw[:cut], raw[cut + 1 :]
+
     parser = _parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw)
+    args.trailing = trailing
     if not getattr(args, "handler", None):
         parser.print_help()
         return EXIT_USAGE
@@ -77,6 +89,26 @@ def _parser() -> argparse.ArgumentParser:
     d.add_argument("--variant", default=None)
     d.add_argument("--exit-zero", action="store_true", help="report changes but always exit 0")
     d.set_defaults(handler=_diff)
+
+    check = subs.add_parser("check", help="adjudicate a contract against the design")
+    check.add_argument("contract", help="path to a contract, optionally 'file.py:name'")
+    check.set_defaults(handler=_check)
+
+    gate = subs.add_parser("gate", help="run ERC and DRC at every severity")
+    gate.add_argument("design", type=Path, help="a .kicad_sch or a .kicad_pcb")
+    gate.add_argument(
+        "--fail-on",
+        default="error",
+        choices=("error", "warning", "any"),
+        help="which severity should fail the gate (default: error)",
+    )
+    gate.set_defaults(handler=_gate)
+
+    g = subs.add_parser("guard", help="run a command and adjudicate what it did")
+    g.add_argument("schematic", type=Path)
+    g.add_argument("--contract", default=None, help="also check this contract afterwards")
+    g.add_argument("--dry-run", action="store_true", help="read twice without running anything")
+    g.set_defaults(handler=_guard)
 
     return parser
 
@@ -192,6 +224,96 @@ def _print_diff(result: NetlistDiff) -> None:
             f"\nWARNING: {len(risky)} pin swap(s) on a two-pin part. If any is polarised, "
             "it is now backwards, and ERC will not tell you."
         )
+
+
+def _print_check(report: CheckReport) -> None:
+    for result in report.results:
+        print(f"  {result}")
+    counts = {s: len(report.of_status(s)) for s in ("pass", "fail", "skipped", "unsupported")}
+    summary = ", ".join(f"{v} {k}" for k, v in counts.items() if v)
+    print(f"\n{report.verdict.upper()}  ({summary})")
+    if counts["skipped"]:
+        print("note: a skipped rule was not evaluated, and is not a pass.")
+
+
+def _check(args: argparse.Namespace) -> int:
+    try:
+        spec = contract.load(args.contract)
+    except (FileNotFoundError, ImportError, ValueError) as exc:
+        raise EnvironmentError_(f"could not load contract: {exc}") from exc
+
+    source = Path(contract.resolve_source(spec, args.contract))
+    netlist = Cli10Backend().netlist(source, variant=spec.variant)
+    report = check_spec(spec, netlist)
+    print(f"{source}")
+    _print_check(report)
+    return EXIT_OK if report.verdict == "pass" else EXIT_VIOLATION
+
+
+def _print_rules(report: RuleReport, label: str) -> None:
+    errors, warnings = report.errors, report.warnings
+    print(f"{label}: {len(errors)} error(s), {len(warnings)} warning(s)")
+    for finding in report.findings:
+        if finding.severity in ("error", "warning"):
+            where = f" [{finding.sheet}]" if finding.sheet else ""
+            print(f"  {finding}{where}")
+
+
+def _gate(args: argparse.Namespace) -> int:
+    backend = Cli10Backend()
+    design = args.design
+    if design.suffix == ".kicad_pcb":
+        report = backend.drc(design, schematic_parity=True)
+        _print_rules(report, "DRC (with schematic parity)")
+    else:
+        report = backend.erc(design)
+        _print_rules(report, "ERC")
+
+    print(
+        "\nseverities requested: "
+        + ", ".join(report.severities_requested)
+        + "   (KiCad's defaults would hide most of these)"
+    )
+    threshold = {
+        "error": len(report.errors),
+        "warning": len(report.errors) + len(report.warnings),
+        "any": len(report.findings),
+    }[args.fail_on]
+    return EXIT_VIOLATION if threshold else EXIT_OK
+
+
+def _guard(args: argparse.Namespace) -> int:
+    argv = list(args.trailing)
+    if not argv and not args.dry_run:
+        print(
+            "guard needs a command after `--`:\n  netspec guard board.kicad_sch -- <command>",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    spec = None
+    if args.contract:
+        try:
+            spec = contract.load(args.contract)
+        except (FileNotFoundError, ImportError, ValueError) as exc:
+            raise EnvironmentError_(f"could not load contract: {exc}") from exc
+
+    backend = Cli10Backend()
+    print(f"guarding {args.schematic}")
+    result = run_guard(args.schematic, argv or ["true"], read=backend.netlist, spec=spec)
+
+    print(f"\n-- {result.command} --\n")
+    _print_diff(result.diff)
+
+    if result.check is not None:
+        print("\nCONTRACT")
+        _print_check(result.check)
+
+    if result.ok:
+        return EXIT_OK
+    if not result.command.ok:
+        print("\nthe command itself failed; the design may be half-edited.")
+    return EXIT_VIOLATION
 
 
 if __name__ == "__main__":  # pragma: no cover

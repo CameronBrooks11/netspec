@@ -60,7 +60,7 @@ class Cli10Backend:
         )
 
     def netlist(self, schematic: Path, *, variant: str | None = None) -> Netlist:
-        source = _require(schematic)
+        source = _require(schematic, sandboxed=self._cli.sandboxed)
         args = ["sch", "export", "netlist", "--format", "kicadxml"]
         if variant:
             args += ["--variant", variant]
@@ -78,7 +78,7 @@ class Cli10Backend:
         return dataclasses.replace(parsed, source=str(source))
 
     def erc(self, schematic: Path) -> RuleReport:
-        source = _require(schematic)
+        source = _require(schematic, sandboxed=self._cli.sandboxed)
         with self._workfile(source, ".erc.json") as out:
             self._run(
                 [
@@ -96,7 +96,7 @@ class Cli10Backend:
         return _report(payload, source, ("violations",))
 
     def drc(self, board: Path, *, schematic_parity: bool = True) -> RuleReport:
-        source = _require(board)
+        source = _require(board, sandboxed=self._cli.sandboxed)
         args = ["pcb", "drc", "--format", "json", "--severity-all"]
         if schematic_parity:
             args.append("--schematic-parity")
@@ -163,11 +163,26 @@ class _TempFile:
             self._path.unlink(missing_ok=True)
 
 
-def _require(path: Path) -> Path:
+def _require(path: Path, *, sandboxed: bool = False) -> Path:
     resolved = Path(path).expanduser().resolve()
     if not resolved.is_file():
         raise EnvironmentError_(f"no such file: {path}")
+    if sandboxed and not _reachable_in_sandbox(resolved):
+        raise EnvironmentError_(
+            f"{resolved} is outside what a sandboxed KiCad can read.\n"
+            "A Flatpak KiCad sees only your home directory and removable media -- not "
+            "/tmp, which it has its own private copy of. Move the design under your home "
+            "directory, or point NETSPEC_KICAD_CLI at a non-sandboxed kicad-cli."
+        )
     return resolved
+
+
+# What a Flatpak KiCad is granted: filesystems=home;/media;/run/media
+_SANDBOX_ROOTS = (Path.home(), Path("/media"), Path("/run/media"))
+
+
+def _reachable_in_sandbox(path: Path) -> bool:
+    return any(path.is_relative_to(root) for root in _SANDBOX_ROOTS)
 
 
 def _load(path: Path, source: Path) -> dict:

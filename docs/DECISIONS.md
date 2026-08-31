@@ -128,6 +128,17 @@ Named nets diff by name; anonymous nets diff by node-set identity. A pure rename
 structural change is reported as benign; a structural change under a stable name is
 reported loudly.
 
+### D11.1 — A one-node net is a floating pin, not a net (amendment, Phase 2)
+
+KiCad reports every unconnected pin as a net of one node. Diffing those as nets turns a
+single edit into a removal plus an addition: moving one connection between two pins of a
+part produced *three* reported changes, which is precisely the noise D11 exists to
+prevent.
+
+Single-node nets are therefore excluded from net matching and reported as a separate
+floating-pin delta -- ``now_floating`` and ``no_longer_floating``. One edit reads as one
+change, and "7 pins came free" is more legible than seven phantom net additions.
+
 ## D12 — Intent is expressed against pin *functions* where possible
 
 KiCad's `kicadxml` netlist carries `pinfunction` and `pintype` per node. A contract says
@@ -153,6 +164,17 @@ Therefore: netspec passes `--severity-all`, reports severity per finding, and le
 caller decide what fails — explicitly and in the report. It never infers "clean" from an
 exit code; it parses the JSON and counts. A `doctor` check flags any `.kicad_pro` relying
 on KiCad's defaults for the parity rules.
+
+### D4.1 — The Oracle boundary bans *KiCad*, not `subprocess` (amendment, Phase 3)
+
+``tests/test_boundaries.py`` originally banned the string ``subprocess`` anywhere outside
+``oracle/``. That is the right rule for the wrong reason: what must not leak is *KiCad*,
+so that the IPC backend stays one file.
+
+``guard`` has to run an arbitrary command the user names -- an agent, a build script, a
+generator -- and that is not KiCad leaking in. The rule is narrowed to name an explicit
+exemption, ``ops/run.py``, which may spawn a process but must never invoke a KiCad
+binary. Widening the exemption list is a design change and should be argued for here.
 
 ## D14 — Name: `netspec`
 

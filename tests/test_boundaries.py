@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "kicad_netspec"
@@ -19,17 +20,67 @@ def test_never_imports_pcbnew() -> None:
     assert not offenders, f"pcbnew has no future in KiCad 11: {offenders}"
 
 
-def test_kicad_only_leaks_in_through_the_oracle() -> None:
-    """`kicad-cli` and subprocess live in oracle/ only, so the IPC backend is one file."""
-    offenders = []
-    for p in _py_files():
-        if p.parent.name == "oracle" or p.parent.parent.name == "oracle":
-            continue
-        text = p.read_text(encoding="utf-8")
-        if "kicad-cli" in text or "subprocess" in text:
-            offenders.append(p.relative_to(SRC))
+# Modules permitted to spawn a process for reasons unrelated to KiCad (D4.1).
+# Adding to this list is a design change; argue for it in docs/DECISIONS.md first.
+SPAWN_EXEMPT = {"ops/run.py"}
+
+
+def _in_oracle(path: Path) -> bool:
+    return "oracle" in path.relative_to(SRC).parts
+
+
+def test_kicad_is_only_invoked_from_the_oracle() -> None:
+    """No KiCad binary is named outside oracle/, so the IPC backend stays one file."""
+    offenders = [
+        p.relative_to(SRC)
+        for p in _py_files()
+        if not _in_oracle(p) and "kicad-cli" in p.read_text(encoding="utf-8")
+    ]
     assert not offenders, (
         f"KiCad must only be reachable through the Oracle protocol; found in {offenders}"
+    )
+
+
+def test_only_the_oracle_and_the_command_runner_spawn_processes() -> None:
+    """Everything else works on the model and touches no process at all (D4.1)."""
+    offenders = []
+    for p in _py_files():
+        rel = p.relative_to(SRC)
+        if _in_oracle(p) or rel.as_posix() in SPAWN_EXEMPT:
+            continue
+        if "subprocess" in p.read_text(encoding="utf-8"):
+            offenders.append(rel)
+    assert not offenders, f"unexpected process spawning outside the oracle: {offenders}"
+
+
+def test_the_command_runner_never_invokes_kicad() -> None:
+    """`guard` runs whatever the user names. That must never be a KiCad binary.
+
+    Checked against what the module actually references, not against the word "kicad" --
+    the docstring is allowed to explain the rule it is subject to.
+    """
+    runner = SRC / "ops" / "run.py"
+    if not runner.exists():
+        return
+
+    tree = ast.parse(runner.read_text(encoding="utf-8"))
+    referenced = {
+        node.value.lower()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    # Docstrings are constants too, so look only for something that could be executed.
+    invocations = {s for s in referenced if "kicad-cli" in s or "flatpak" in s}
+    assert not invocations, f"ops/run.py must not invoke KiCad: {invocations}"
+
+    imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    } | {node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    assert not any("oracle" in name for name in imports), (
+        "ops/run.py must not reach into the oracle"
     )
 
 
