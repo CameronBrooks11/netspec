@@ -2,8 +2,17 @@
 
 **Verify PCB connectivity against declared engineering intent, using KiCad as the oracle.**
 
-> **Status: pre-alpha, unreleased.** All six commands work. The design lives in
-> [`docs/DECISIONS.md`](docs/DECISIONS.md).
+> **Status: pre-alpha.** All six commands work and are dogfooded in this repo's own CI.
+> The stable surface is the report and the exit codes; the Python API will move. The
+> design lives in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+
+```sh
+pip install kicad-netspec
+```
+
+Needs KiCad 8 or newer for `kicad-cli` — found on `PATH`, via Flatpak, in a macOS bundle
+or a Windows install. `netspec doctor` says which. The core itself has **no runtime
+dependencies**.
 
 Every tool that edits a KiCad design reports on its own arithmetic. Only KiCad knows what
 a design actually *is*. `netspec` asks it — after every change — and fails loudly when

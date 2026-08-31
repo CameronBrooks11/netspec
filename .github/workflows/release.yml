@@ -116,3 +116,34 @@ jobs:
       # release and the next. Pin below is v1.12.4; bump it deliberately, with the
       # version in the comment.
       - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
+
+  major-tag:
+    # Consumers write `uses: CameronBrooks11/netspec@v0`, which is the convention for
+    # actions and needs a major tag that moves with each release. Only after a
+    # successful publish, so the moving tag never points at a version nobody can install.
+    #
+    # Note the asymmetry with everything above: this is deliberately a *mutable* ref,
+    # because that is what the consumer contract asks for. It is ours to move; the
+    # third-party pins are not.
+    name: Move the major tag
+    needs: [publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Point v<major> at this release
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          major="v${version%%.*}"
+          # A pre-1.0 prerelease should not move the tag people pin to.
+          case "$version" in *[!0-9.]*) echo "prerelease $version; leaving $major alone"; exit 0;; esac
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f -a "$major" -m "netspec $GITHUB_REF_NAME"
+          git push -f origin "$major"
+          echo "$major -> $GITHUB_REF_NAME"
