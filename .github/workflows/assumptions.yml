@@ -1,0 +1,34 @@
+name: kicad-assumptions
+
+# D6: every KiCad 11 fact netspec plans around is verified in master, weekly, so an
+# upstream revert arrives as a red build rather than a surprise when KiCad 11 ships.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  push:
+    paths:
+      - "tests/test_kicad_assumptions.py"
+      - ".github/workflows/assumptions.yml"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch KiCad master (blobless, api dirs only)
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://gitlab.com/kicad/code/kicad.git kicad-src
+          cd kicad-src
+          git sparse-checkout set \
+            pcbnew/api pcbnew/python eeschema/api common/api kicad/cli
+          echo "KiCad master at $(git rev-parse --short HEAD)"
+
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+
+      - name: Verify planned API commands still exist
+        run: uv run pytest tests/test_kicad_assumptions.py -v --kicad-source=kicad-src

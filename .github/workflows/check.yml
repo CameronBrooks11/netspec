@@ -1,0 +1,96 @@
+# Calls the `just` recipes so CI and local share one gate definition.
+#
+# Path-aware: docs-only changes skip the heavy check/test jobs via
+# dorny/paths-filter, while the always-running `ok` aggregator still reports a
+# green required status — so a docs PR merges without running the full matrix.
+#
+# Branch protection: require ONLY the `ok` context (not `check`/`test`). Skipped
+# jobs don't block; only failures and cancellations do.
+
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
+
+  check:
+    name: Check
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Setup
+        run: just setup
+
+      - name: Check (fmt + lint + typecheck)
+        run: just check
+
+  test:
+    name: Test
+    needs: [changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Setup
+        run: just setup
+
+      - name: Test
+        run: just test
+
+  # ─── Unified gate ─────────────────────────────────────────────────────
+  # The ONLY job required by branch protection. Add every job to `needs:`.
+  ok:
+    name: ok
+    if: always()
+    needs: [changes, check, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail if any upstream job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - name: Pass
+        run: echo 'All checks passed or were skipped'
