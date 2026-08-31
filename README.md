@@ -2,19 +2,34 @@
 
 **Verify PCB connectivity against declared engineering intent, using KiCad as the oracle.**
 
-> **Status: pre-alpha, unreleased.** Nothing works yet. The design lives in
-> [`docs/DECISIONS.md`](docs/DECISIONS.md); the reason it exists lives in
-> [`docs/FAILURE-MODES.md`](docs/FAILURE-MODES.md).
+> **Status: pre-alpha, unreleased.** `doctor` and `netlist` work; `check`, `diff` and
+> `guard` do not exist yet. The design lives in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 Every tool that edits a KiCad design reports on its own arithmetic. Only KiCad knows what
 a design actually *is*. `netspec` asks it — after every change — and fails loudly when
 intent and reality diverge.
 
 ```sh
+netspec doctor                                     # find and probe a KiCad engine
+netspec netlist board.kicad_sch                    # what KiCad says is connected
+
+# not built yet
 netspec check board.kicad_sch                      # assert a contract
 netspec diff before.json board.kicad_sch           # what actually changed
 netspec guard board.kicad_sch -- <any tool>        # snapshot, run, re-read, adjudicate
 ```
+
+```
+$ netspec netlist tests/fixtures/good_ldo.kicad_sch
+  3 components, 3 nets
+    +3V3  C2.1, U1.2
+    GND   C1.2, C2.2, U1.1
+    VIN   C1.1, U1.3
+```
+
+Finds `kicad-cli` on `PATH`, via Flatpak, in a macOS bundle or a Windows install --
+`netspec doctor` says which. A missing engine is an environment fault (exit `4`), never a
+finding about your design.
 
 `netspec` **never writes to a design file.** It is the gate an editing tool's output has
 to pass, not the tool.
@@ -31,7 +46,8 @@ does:
 - `pcb drc --schematic-parity` at default severity reporting **0 problems on a board with
   147**, because `footprint_symbol_mismatch` defaults to `warning`
 
-See [`docs/FAILURE-MODES.md`](docs/FAILURE-MODES.md) for the reproductions.
+Each is frozen as a regression test in [`tests/fixtures/`](tests/fixtures), paired with
+the netlist KiCad itself derived from it.
 
 ## Family
 

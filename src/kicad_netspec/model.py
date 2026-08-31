@@ -1,0 +1,227 @@
+"""The canonical model: what a design *is*, as KiCad reports it.
+
+Deliberately coordinate-free and UUID-free. Two schematics that place the same parts at
+different positions produce equal models, because position carries no electrical meaning.
+Everything here is frozen and hashable, so comparison is set arithmetic.
+
+Connectivity is exact (DECISIONS D9): a pin is on a net or it is not. There is no
+threshold anywhere in this module, and there must never be one.
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from typing import Literal
+
+__all__ = [
+    "Component",
+    "Net",
+    "Netlist",
+    "Node",
+    "PinRef",
+    "parse_pin_ref",
+]
+
+# KiCad names an unlabelled net after its own contents, e.g. "Net-(C1-Pad1)" or
+# "unconnected-(U1-VI-Pad3)". Such a name is a description, not an identity: change the
+# connectivity and the name changes with it. See DECISIONS D11.
+_ANONYMOUS = re.compile(r"^(?:Net-|unconnected-)\(.*\)$")
+
+
+@dataclass(frozen=True, order=True)
+class Node:
+    """One pin of one component, sitting on a net."""
+
+    ref: str
+    """Component reference designator, e.g. ``C1``."""
+
+    pin: str
+    """Pin number as KiCad reports it, e.g. ``1``. Not necessarily numeric."""
+
+    function: str | None = None
+    """Pin name from the symbol, e.g. ``VI_3``. KiCad's ``pinfunction``.
+
+    Preferred over ``pin`` when writing a contract (DECISIONS D12): pin *numbers* are
+    what the known editing bugs corrupt, while a function name survives both a
+    sign-flipped coordinate helper and a library renumbering.
+    """
+
+    type: str | None = None
+    """Electrical type, e.g. ``power_in``, ``passive``. KiCad's ``pintype``."""
+
+    def __str__(self) -> str:
+        return f"{self.ref}.{self.pin}"
+
+
+@dataclass(frozen=True)
+class Net:
+    """A set of pins KiCad considers electrically joined."""
+
+    name: str
+    nodes: frozenset[Node]
+
+    @property
+    def anonymous(self) -> bool:
+        """True when KiCad generated this name from the net's own contents (D11)."""
+        return bool(_ANONYMOUS.match(self.name))
+
+    @property
+    def connected(self) -> bool:
+        """True when this net actually joins two or more pins.
+
+        A one-node net is KiCad's way of reporting an isolated pin. A schematic full of
+        them looks fine and is wired to nothing -- the failure mode in
+        ``tests/fixtures/dangling_wires.kicad_sch``.
+        """
+        return len(self.nodes) >= 2
+
+    @property
+    def identity(self) -> frozenset[Node]:
+        """What this net *is*, independent of what it is called.
+
+        Anonymous nets are compared by this rather than by name, so that a rename which
+        follows a connectivity change is not mistaken for a second, separate change.
+        """
+        return self.nodes
+
+    def __str__(self) -> str:
+        return f"{self.name} [{', '.join(sorted(str(n) for n in self.nodes))}]"
+
+
+@dataclass(frozen=True)
+class Component:
+    """A placed part, as it appears in the netlist."""
+
+    ref: str
+    value: str = ""
+    footprint: str | None = None
+    lib_id: str | None = None
+
+    def __str__(self) -> str:
+        return f"{self.ref} ({self.value})" if self.value else self.ref
+
+
+@dataclass(frozen=True)
+class Netlist:
+    """KiCad's opinion of one design, canonicalised.
+
+    This is the only representation of "what the design is" that netspec compares
+    against intent. It comes from an :class:`~kicad_netspec.oracle.base.Oracle`; nothing
+    else in the package is permitted to construct one from a design file.
+    """
+
+    nets: Mapping[str, Net]
+    components: Mapping[str, Component]
+    source: str = ""
+    kicad_version: str = ""
+    _by_pin: Mapping[tuple[str, str], str] = field(default_factory=dict, repr=False)
+
+    # -- lookups ---------------------------------------------------------------
+
+    def net_of(self, ref: str, pin: str) -> str | None:
+        """Name of the net a given pin sits on, or None if the pin is unknown."""
+        return self._by_pin.get((ref, pin))
+
+    def resolve(self, spec: str) -> Node | None:
+        """Resolve ``"C1.1"`` or ``"U1.VI"`` to a node.
+
+        A bare pin number is matched first; failing that the string is matched against
+        the pin *function*, case-insensitively and ignoring KiCad's ``_<n>`` suffix, so
+        ``U1.VI`` finds the pin KiCad calls ``VI_3``.
+        """
+        ref, _, pin = spec.partition(".")
+        if not ref or not pin:
+            return None
+        for node in self.nodes_of(ref):
+            if node.pin == pin:
+                return node
+        wanted = pin.casefold()
+        for node in self.nodes_of(ref):
+            fn = node.function
+            if fn and (fn.casefold() == wanted or _strip_suffix(fn).casefold() == wanted):
+                return node
+        return None
+
+    def nodes_of(self, ref: str) -> tuple[Node, ...]:
+        """Every node belonging to one component, ordered by pin."""
+        found = (n for net in self.nets.values() for n in net.nodes if n.ref == ref)
+        return tuple(sorted(found))
+
+    # -- summaries -------------------------------------------------------------
+
+    @property
+    def connected_nets(self) -> tuple[Net, ...]:
+        """Nets that join two or more pins, ordered by name."""
+        return tuple(sorted((n for n in self.nets.values() if n.connected), key=lambda n: n.name))
+
+    @property
+    def isolated_nodes(self) -> tuple[Node, ...]:
+        """Pins KiCad reports as connected to nothing else."""
+        found = (next(iter(net.nodes)) for net in self.nets.values() if len(net.nodes) == 1)
+        return tuple(sorted(found))
+
+    @property
+    def named_nets(self) -> tuple[Net, ...]:
+        return tuple(
+            sorted((n for n in self.nets.values() if not n.anonymous), key=lambda n: n.name)
+        )
+
+    @property
+    def anonymous_nets(self) -> tuple[Net, ...]:
+        return tuple(sorted((n for n in self.nets.values() if n.anonymous), key=lambda n: n.name))
+
+    def __str__(self) -> str:
+        return (
+            f"Netlist({len(self.components)} components, {len(self.nets)} nets, "
+            f"{len(self.connected_nets)} connected)"
+        )
+
+
+PinRef = tuple[str, str]
+"""A ``(ref, pin_or_function)`` pair as written in a contract."""
+
+Status = Literal["pass", "fail", "unsupported", "skipped"]
+"""Check outcome (DECISIONS D9). Only ``pass`` is green.
+
+There is deliberately no fifth value for an indeterminate result: connectivity is
+discrete, so a check either resolves or its inputs were unavailable.
+"""
+
+
+def parse_pin_ref(spec: str) -> PinRef:
+    """Split ``"C1.1"`` or ``"U1.VI"`` into its parts.
+
+    Raises ``ValueError`` on anything that is not ``<ref>.<pin>``, rather than guessing,
+    because a silently mis-parsed contract is the failure this project exists to catch.
+    """
+    ref, sep, pin = spec.partition(".")
+    if not sep or not ref or not pin:
+        raise ValueError(f"expected '<ref>.<pin>', got {spec!r}")
+    return ref, pin
+
+
+def _strip_suffix(function: str) -> str:
+    """``"VI_3"`` -> ``"VI"``. KiCad suffixes a pin function with its number."""
+    head, sep, tail = function.rpartition("_")
+    return head if sep and tail.isdigit() else function
+
+
+def build_netlist(
+    nets: Iterable[Net],
+    components: Iterable[Component],
+    *,
+    source: str = "",
+    kicad_version: str = "",
+) -> Netlist:
+    """Assemble a :class:`Netlist`, building the pin index as we go."""
+    net_map = {n.name: n for n in nets}
+    by_pin = {(node.ref, node.pin): net.name for net in net_map.values() for node in net.nodes}
+    return Netlist(
+        nets=net_map,
+        components={c.ref: c for c in components},
+        source=source,
+        kicad_version=kicad_version,
+        _by_pin=by_pin,
+    )
