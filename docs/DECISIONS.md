@@ -230,6 +230,39 @@ This is the kind of thing that is only discoverable by running it. Verified end 
 inside the real image, which is also the first confirmation that netspec works against a
 **native** `kicad-cli` rather than a Flatpak-wrapped one.
 
+## D17 — Releases publish from a tag on main, and what that does not yet prove
+
+`release.yml` runs **no tests**. It verifies the artifact — builds, metadata is valid,
+the wheel installs cold into an empty venv, `--version` agrees with the tag, and nothing
+but `kicad-netspec` lands in that venv (the zero-dependency claim, met against the built
+wheel rather than the source tree). Correctness is the `Check` gate's job on main.
+
+Two gates make that argument hold rather than merely stating it:
+
+* `scripts/assert_tag_on_main.sh` — refuses a tag that is not an ancestor of
+  `origin/main`, and refuses when it cannot resolve `origin/main` at all rather than
+  assuming. A script, not inline YAML, so the test suite can exercise it against
+  throwaway repositories; an inline gate can only be grepped, and dropping one `!` would
+  leave it green and inert.
+* The tag must equal `project.version`, or the release would publish a version whose
+  name lies about its content.
+
+**The gap, stated plainly.** Being on main proves the commit is on main. It proves the
+gate *passed* only if main is protected to require `Check`. netspec's main is **not
+protected**, so today this stops a stray tag but not an unreviewed push. Closing it means
+requiring a PR for every change — a real change to how this repo is worked on, and
+Cameron's call rather than mine.
+
+Publishing is PyPI Trusted Publishing (OIDC); no token exists in this repo. The
+registration names `CameronBrooks11/netspec`, workflow `release.yml`, environment
+`pypi`, project `kicad-netspec`. Renaming any of them breaks releases *silently* — the
+workflow runs and the upload is rejected — so a test asserts the filename and the
+environment.
+
+Version note: tags `v0.2.0`–`v0.4.1` were cut while `pyproject` still said `0.0.1`, so
+they claimed versions the package never declared. `0.5.0` is the first version where the
+two agree, and the gate above now prevents a recurrence.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical

@@ -1,0 +1,118 @@
+# Release: push a v* tag -> build -> verify the artifact -> publish to PyPI.
+#
+# Publishing uses PyPI Trusted Publishing (OIDC) — no token lives in this repo.
+# The publisher registered on PyPI names this exact workflow file and the `pypi`
+# environment; renaming either silently breaks the binding.
+#
+# This workflow verifies the *artifact* — it builds, its metadata is valid, the wheel
+# installs cold and answers `--version`. Correctness of the code is the `Check` gate's
+# job, which every commit on main has already run.
+#
+# That argument has a gap worth knowing about: it holds fully only when main is
+# protected to require `Check`. netspec's main is not protected yet (D17), so the
+# ancestry gate below stops a stray tag but cannot prove the gate passed. Every action
+# here is pinned to an exact ref rather than a floating major, and a test enforces that.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+# One release at a time across ALL tags, not per-tag: `release-${{ github.ref }}` would
+# put two versions in separate groups and run them concurrently, which is the race this
+# exists to prevent.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          # Full history: the ancestry check needs to see main.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5.4.2
+
+      # The gate the safety argument rests on. Nothing below runs the test suite, so a
+      # tag pointing off main would publish code the Check gate never saw. In a script
+      # so it can be tested — an inline gate is only ever grepped, and dropping one `!`
+      # would leave it green and inert.
+      - name: Assert the tag is on main
+        run: scripts/assert_tag_on_main.sh "$GITHUB_SHA" origin/main
+
+      # A tag that disagrees with pyproject would publish a version whose name lies
+      # about its content. Fail before anything is built.
+      - name: Assert the tag matches the package version
+        run: |
+          declared=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          tagged="${GITHUB_REF_NAME#v}"
+          echo "pyproject: $declared, tag: $tagged"
+          [ "$declared" = "$tagged" ] || { echo "::error::tag $GITHUB_REF_NAME does not match version $declared"; exit 1; }
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Check metadata
+        run: uvx twine check --strict dist/*
+
+      # A cold install into an empty venv — the environment every `pip install
+      # kicad-netspec` user starts from, which no other job reproduces. No extras: the
+      # core claims zero runtime dependencies, and this is where that claim meets the
+      # built wheel rather than the source tree.
+      #
+      # `--no-config` because `uv pip` reads `[tool.uv]` by walking up from the CWD, and
+      # this step runs inside the checkout. netspec has nothing there that would change
+      # resolution today; the step's whole claim is that it reproduces a consumer's
+      # environment, and a consumer is not standing in this directory.
+      - name: Smoke-test the wheel
+        run: |
+          uv venv /tmp/smoke
+          VIRTUAL_ENV=/tmp/smoke uv pip install --no-config dist/*.whl
+          version=$(/tmp/smoke/bin/netspec --version)
+          echo "$version"
+          [ "$version" = "netspec ${GITHUB_REF_NAME#v}" ] || { echo "::error::--version says '$version'"; exit 1; }
+
+      - name: Assert the core has no runtime dependencies
+        run: |
+          VIRTUAL_ENV=/tmp/smoke uv pip list --format=json --no-config \
+            | python3 -c "
+          import json, sys
+          installed = {p['name'].lower() for p in json.load(sys.stdin)}
+          extra = installed - {'kicad-netspec'}
+          print('installed alongside:', sorted(extra) or 'nothing')
+          sys.exit(1 if extra else 0)"
+
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Named in the Trusted Publisher registration. Renaming breaks the binding.
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          name: dist
+          path: dist/
+
+      # SHA-pinned, not `@release/v1`. This is the one action holding the OIDC identity
+      # for PyPI, and a branch ref is mutable — its contents can change between one
+      # release and the next. Pin below is v1.12.4; bump it deliberately, with the
+      # version in the comment.
+      - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
