@@ -247,11 +247,32 @@ Two gates make that argument hold rather than merely stating it:
 * The tag must equal `project.version`, or the release would publish a version whose
   name lies about its content.
 
-**The gap, stated plainly.** Being on main proves the commit is on main. It proves the
-gate *passed* only if main is protected to require `Check`. netspec's main is **not
-protected**, so today this stops a stray tag but not an unreviewed push. Closing it means
-requiring a PR for every change — a real change to how this repo is worked on, and
-Cameron's call rather than mine.
+**The gap, now closed.** Being on main proves the commit is on main; it proves the gate
+*passed* only if main requires `Check`. It now does:
+
+| setting | value |
+|---|---|
+| required status checks | `ok` (the bare context, never individual job names) |
+| require branches up to date | yes |
+| require a pull request | yes, 0 approvals |
+| do not allow bypassing | **yes** |
+| linear history | yes |
+| force pushes / deletions | no |
+| conversation resolution | required |
+
+Taken from the house security baseline. The `ok` gate is a single aggregating job every
+other job feeds into, so adding or renaming CI jobs never means touching branch
+protection.
+
+One divergence from `partspec`, deliberately: it runs with admin bypass *enabled*, and
+netspec does not. Verified rather than assumed — with bypass on, a direct push to main
+returned `Bypassed rule violations` and **landed anyway**; with it off the same push is
+`remote rejected`. Since this workflow's entire safety argument is "every commit on main
+passed `Check`", a bypass an admin can take at 3am is the argument's weakest link, and
+this is the repo where that argument gates a PyPI upload.
+
+The cost is real: every change here now needs a pull request, including a one-line
+docs fix, and there is no emergency escape hatch short of turning the setting off.
 
 Publishing is PyPI Trusted Publishing (OIDC); no token exists in this repo. The
 registration names `CameronBrooks11/netspec`, workflow `release.yml`, environment
