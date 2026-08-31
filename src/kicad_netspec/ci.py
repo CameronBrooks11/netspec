@@ -103,7 +103,7 @@ def _one(
     return (
         "\n".join(body),
         bool(result and not result.empty),
-        bool(result and result.pin_swaps),
+        bool(result and result.suspicious),
         failed,
     )
 
@@ -173,17 +173,23 @@ def _render_diff(result: NetlistDiff) -> str:
         lines += [f"{c}" for c in result.component_changes]
         lines += ["```", ""]
 
-    if result.pin_swaps:
+    repins = [s for s in result.meaningful_swaps if s.significance == "repin"]
+    if repins:
+        lines += ["**Pins re-assigned**", "", "```"]
+        lines += [f"{s}" for s in repins]
+        lines += ["```", ""]
+
+    if result.suspicious:
         lines += [
             "> [!WARNING]",
-            "> **A connection moved between pins of the same part.**",
+            "> **A polarised part has been reversed.**",
             ">",
-            "> That is the signature of a coordinate or sign error rather than an edit.",
-            "> On a polarised part it reverses the component, and ERC has no rule against",
-            "> that — it is legal wiring.",
+            "> Its two terminals are not interchangeable, and they have traded nets.",
+            "> ERC will not report this — reversing a polarised part is legal wiring —",
+            "> so nothing else in your pipeline is going to tell you.",
             ">",
         ]
-        lines += [f"> - `{s}`" for s in result.pin_swaps]
+        lines += [f"> - `{s}`" for s in result.suspicious]
         lines.append("")
 
     return "\n".join(lines).rstrip()

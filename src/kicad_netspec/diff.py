@@ -22,6 +22,7 @@ against it.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal
@@ -81,32 +82,92 @@ class ComponentChange:
         return f"~ {self.ref}  {self.kind}: {self.before!r} -> {self.after!r}"
 
 
+# Two-terminal parts whose terminals are interchangeable. Swapping their pins changes
+# nothing electrically, so reporting it is pure noise.
+_SYMMETRIC = frozenset({"r", "r_small", "c", "c_small", "l", "l_small", "r_us", "c_us"})
+
+# Parts whose two terminals are *not* interchangeable, so a swap reverses the part.
+# Anchored deliberately: a bare "d" prefix would also match Device, Driver, DIP and
+# every other symbol that happens to start with the letter.
+_POLARISED_SYMBOL = re.compile(
+    r"^(c_polarized|cp|d|led|battery|d_schottky|d_zener|d_tvs|d_photo)(_.*)?$"
+)
+
+# Pin names that declare polarity outright, whatever the symbol is called -- more
+# reliable than a name match where the library provides them, since Device:D names its
+# pins K and A.
+_POLARISED_PIN_NAMES = frozenset({"a", "k", "+", "-", "anode", "cathode"})
+
+# KiCad suffixes a pin function with its pin number: "K_1", "A_2". Strip exactly one
+# such suffix. (str.rstrip with a character set would take "a6_25" all the way down to
+# "a" and call an Arduino's analog pin an anode.)
+_PIN_SUFFIX = re.compile(r"^(.*?)_\d+$")
+
+Significance = Literal["polarity", "repin", "none"]
+
+
+def _symbol_name(lib_id: str | None) -> str:
+    return (lib_id or "").rpartition(":")[2].casefold()
+
+
+def _pin_name(function: str | None) -> str:
+    name = (function or "").casefold()
+    match = _PIN_SUFFIX.match(name)
+    return match.group(1) if match else name
+
+
 @dataclass(frozen=True)
 class PinSwap:
     """A connection moved from one pin of a part to another, on the same net.
 
-    The signature of a coordinate or sign error in a schematic writer. Called out
-    separately because the net still exists, still has the right name, and still has the
-    right number of connections -- so every coarser check passes.
+    Whether that matters depends entirely on **the part**, not on the topology. A
+    reversed electrolytic capacitor and a deliberately re-pinned connector produce an
+    identical diff: two pins trading nets. Measured on a real board, every swap in a
+    genuine re-pinning commit paired up exactly the way a reversed capacitor does, so
+    pairing cannot separate them -- see ``significance``.
     """
 
     ref: str
     net: str
     was: Node
     now: Node
+    lib_id: str | None = None
+
+    @property
+    def significance(self) -> Significance:
+        """How much this swap matters, judged from the component.
+
+        ``polarity``
+            The part's terminals are not interchangeable -- a polarised capacitor, a
+            diode, an LED. The swap reverses it. ERC will not report this, because
+            reversing a polarised part is electrically legal wiring.
+        ``none``
+            A symmetric two-terminal passive. Swapping a resistor's pins changes
+            nothing, so this is not worth a reader's attention.
+        ``repin``
+            Anything else -- a connector, an IC. A real change, and usually a
+            deliberate one, so it is reported without a warning.
+        """
+        if {_pin_name(n.function) for n in (self.was, self.now)} & _POLARISED_PIN_NAMES:
+            return "polarity"
+        name = _symbol_name(self.lib_id)
+        if name in _SYMMETRIC:
+            return "none"
+        if _POLARISED_SYMBOL.match(name):
+            return "polarity"
+        return "repin"
 
     @property
     def polarity_risk(self) -> bool:
-        """True when the part is a two-pin device, where a swap reverses it.
-
-        A swap on a polarised part -- an electrolytic capacitor, a diode, an LED --
-        is a build-destroying defect that ERC will not report, because reversing one is
-        electrically legal wiring.
-        """
-        return self.was.pin in {"1", "2"} and self.now.pin in {"1", "2"}
+        """True when this swap reverses a part whose terminals are not interchangeable."""
+        return self.significance == "polarity"
 
     def __str__(self) -> str:
-        note = "  <- reverses a 2-pin part" if self.polarity_risk else ""
+        note = {
+            "polarity": "  <- REVERSES a polarised part",
+            "none": "  (symmetric part; no electrical effect)",
+            "repin": "",
+        }[self.significance]
         return f"{self.ref} on {self.net}: pin {self.was.pin} -> pin {self.now.pin}{note}"
 
 
@@ -148,8 +209,18 @@ class NetlistDiff:
 
     @property
     def suspicious(self) -> tuple[PinSwap, ...]:
-        """Changes that look like a defect rather than an edit."""
-        return self.pin_swaps
+        """Swaps that reverse a part whose terminals are not interchangeable.
+
+        Deliberately narrower than ``pin_swaps``: on a real board, a re-pinning commit
+        produced fourteen swaps and not one of them was a defect. Warning on all of them
+        would train a reader to ignore the warning.
+        """
+        return tuple(s for s in self.pin_swaps if s.significance == "polarity")
+
+    @property
+    def meaningful_swaps(self) -> tuple[PinSwap, ...]:
+        """Swaps worth showing at all -- everything but symmetric two-terminal passives."""
+        return tuple(s for s in self.pin_swaps if s.significance != "none")
 
     def __str__(self) -> str:
         return (
@@ -167,7 +238,7 @@ def diff_netlists(before: Netlist, after: Netlist) -> NetlistDiff:
     return NetlistDiff(
         net_changes=tuple(net_changes),
         component_changes=tuple(_diff_components(before.components, after.components)),
-        pin_swaps=tuple(_pin_swaps(matched)),
+        pin_swaps=tuple(_pin_swaps(matched, after.components)),
         now_floating=tuple(sorted(is_floating - was_floating)),
         no_longer_floating=tuple(sorted(was_floating - is_floating)),
         before_source=before.source,
@@ -260,7 +331,9 @@ def _diff_anonymous(
 # -- the derived signal ----------------------------------------------------------------
 
 
-def _pin_swaps(matched: Iterable[tuple[Net, Net]]) -> list[PinSwap]:
+def _pin_swaps(
+    matched: Iterable[tuple[Net, Net]], components: Mapping[str, Component]
+) -> list[PinSwap]:
     """Find connections that moved between pins of the same part on the same net."""
     swaps: list[PinSwap] = []
     for old, new in matched:
@@ -269,7 +342,16 @@ def _pin_swaps(matched: Iterable[tuple[Net, Net]]) -> list[PinSwap]:
         for was in sorted(gone):
             for now in sorted(came):
                 if was.ref == now.ref and was.pin != now.pin:
-                    swaps.append(PinSwap(ref=was.ref, net=new.name, was=was, now=now))
+                    part = components.get(was.ref)
+                    swaps.append(
+                        PinSwap(
+                            ref=was.ref,
+                            net=new.name,
+                            was=was,
+                            now=now,
+                            lib_id=part.lib_id if part else None,
+                        )
+                    )
                     break
     return swaps
 

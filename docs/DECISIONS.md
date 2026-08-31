@@ -176,6 +176,40 @@ generator -- and that is not KiCad leaking in. The rule is narrowed to name an e
 exemption, ``ops/run.py``, which may spawn a process but must never invoke a KiCad
 binary. Widening the exemption list is a design change and should be argued for here.
 
+## D15 — A pin swap's significance comes from the part, not the topology
+
+**Measured, and it overturned the first design.**
+
+A reversed polarised capacitor and a deliberately re-pinned connector produce an
+*identical* diff: two pins of one component trading nets. The first implementation
+flagged any 1↔2 move as a probable defect. A read-only dry run over a real board's
+history — 22 net changes across a genuine re-pinning commit — produced **14 pin swaps,
+none of them defects**. A tool that warns on all fourteen teaches its reader to ignore
+the warning.
+
+The obvious refinement, "an unpaired swap is a defect, a paired one is an exchange",
+was tested and **rejected**: the reversed capacitor pairs up exactly the same way. There
+is no topological difference to find.
+
+What separates them is the component. `PinSwap.significance`:
+
+| | meaning |
+|---|---|
+| `polarity` | terminals are not interchangeable (`C_Polarized`, `CP`, `D*`, `LED`, `Battery`, or pins named `A`/`K`/`+`/`-`). The swap reverses the part, and ERC has no rule against it. |
+| `none` | a symmetric two-terminal passive (`R`, `C`, `L`). Swapping its pins changes nothing; reporting it is noise. |
+| `repin` | anything else — a connector, an IC. A real change, usually deliberate. Reported without a warning. |
+
+`NetlistDiff.suspicious` returns only the `polarity` swaps, and only those fail a
+`guard` run or raise a warning in a pull-request comment.
+
+Two bugs of my own were found while validating this, both now regression-tested:
+`str.rstrip("_0123456789")` reduced an Arduino's pin `A6_25` to `"a"` and called it an
+anode; and a bare `"d"` symbol prefix matched `Device`, `Driver` and `DIP`. Both
+heuristics are now anchored.
+
+**The lesson worth keeping:** this class of judgement cannot be designed from first
+principles, only measured against designs you did not write.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical

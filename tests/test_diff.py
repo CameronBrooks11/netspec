@@ -113,16 +113,20 @@ def test_pin_swap_is_detected_and_flagged() -> None:
 
     The net keeps its name and its size; only *which pin of C1* is on it changed. Every
     coarser check passes, which is exactly why this needs its own signal.
+
+    The part must be identified for the swap to count as a defect: an identical topology
+    on a connector is a deliberate re-pin, not a reversal (D15).
     """
-    before = _nl(_net("VIN", _n("C1", "1"), _n("R1", "1")))
-    after = _nl(_net("VIN", _n("C1", "2"), _n("R1", "1")))
+    parts = [Component("C1", lib_id="Device:C_Polarized"), Component("R1", lib_id="Device:R")]
+    before = build_netlist([_net("VIN", _n("C1", "1"), _n("R1", "1"))], parts)
+    after = build_netlist([_net("VIN", _n("C1", "2"), _n("R1", "1"))], parts)
     result = diff_netlists(before, after)
 
     (swap,) = result.pin_swaps
     assert swap.ref == "C1"
     assert swap.was.pin == "1"
     assert swap.now.pin == "2"
-    assert swap.polarity_risk, "a 1<->2 swap reverses a two-pin part"
+    assert swap.polarity_risk, "reversing a polarised capacitor is a defect"
     assert result.suspicious == result.pin_swaps
 
 
@@ -141,3 +145,65 @@ def test_moving_a_pin_between_different_parts_is_not_a_swap() -> None:
     result = diff_netlists(before, after)
     assert not result.pin_swaps
     assert result.structural
+
+
+# -- what a pin swap actually means (D15) ----------------------------------------------
+
+
+def _swap(lib_id: str, was_fn: str | None = None, now_fn: str | None = None):
+    before = _nl(_net("A", Node("X", "1", was_fn), _n("R9", "1")))
+    after = _nl(_net("A", Node("X", "2", now_fn), _n("R9", "1")))
+    before = build_netlist(before.nets.values(), [Component("X", lib_id=lib_id), Component("R9")])
+    after = build_netlist(after.nets.values(), [Component("X", lib_id=lib_id), Component("R9")])
+    (swap,) = diff_netlists(before, after).pin_swaps
+    return swap
+
+
+def test_a_swap_on_a_polarised_part_is_a_defect() -> None:
+    for lib in ("Device:C_Polarized", "Device:CP", "Device:LED", "Device:D_Schottky"):
+        assert _swap(lib).significance == "polarity", lib
+
+
+def test_pin_names_declare_polarity_whatever_the_symbol_is_called() -> None:
+    """Device:D names its pins K and A; that beats any name heuristic."""
+    assert _swap("SomeVendor:CustomDiode", "K_1", "A_2").significance == "polarity"
+
+
+def test_a_swap_on_a_symmetric_passive_means_nothing() -> None:
+    for lib in ("Device:R", "Device:C", "Device:L", "Device:R_Small"):
+        assert _swap(lib).significance == "none", lib
+
+
+def test_a_swap_on_a_connector_or_ic_is_a_repin_not_a_defect() -> None:
+    for lib in ("Connector_Generic:Conn_01x02", "Driver_Motor:LMD18200", "Device:Device_Thing"):
+        assert _swap(lib).significance == "repin", lib
+
+
+def test_an_analog_pin_is_not_an_anode() -> None:
+    """Regression: rstrip with a character set reduced 'a6_25' to 'a' and matched anode.
+
+    Found on a real board, where an Arduino Nano's A6/A7 re-pin was reported as a
+    reversed part.
+    """
+    swap = _swap("MCU_Module:Arduino_Nano_v3.x", "A6_25", "A7_26")
+    assert swap.significance == "repin"
+
+
+def test_device_prefixed_symbols_are_not_all_diodes() -> None:
+    """Regression: a bare 'd' prefix matched Device, Driver, DIP and everything else."""
+    for lib in ("Device:Device_Thing", "Driver_Motor:DRV8871", "Package_DIP:DIP-8"):
+        assert _swap(lib).significance != "polarity", lib
+
+
+def test_only_polarity_swaps_are_suspicious() -> None:
+    """Measured: a real re-pinning commit produced 14 swaps and no defects.
+
+    Warning on all of them would train a reader to ignore the warning.
+    """
+    before = _nl(_net("A", _n("J2", "1"), _n("R9", "1")))
+    after = _nl(_net("A", _n("J2", "2"), _n("R9", "1")))
+    before = build_netlist(before.nets.values(), [Component("J2", lib_id="Connector:Conn_01x02")])
+    after = build_netlist(after.nets.values(), [Component("J2", lib_id="Connector:Conn_01x02")])
+    result = diff_netlists(before, after)
+    assert result.pin_swaps, "the swap is still reported"
+    assert not result.suspicious, "but it is not flagged as a defect"

@@ -26,7 +26,10 @@ def _rail(plus_on: str = "VIN", minus_on: str = "GND"):
     nets[minus_on].append(Node("C1", "2"))
     return build_netlist(
         [Net(name=k, nodes=frozenset(v)) for k, v in nets.items()],
-        [Component("C1"), Component("R1")],
+        [
+            Component("C1", lib_id="Device:C_Polarized"),
+            Component("R1", lib_id="Device:R"),
+        ],
     )
 
 
@@ -40,8 +43,18 @@ def test_a_pin_swap_renders_a_warning_callout() -> None:
     result = diff_netlists(_rail(), _rail("GND", "VIN"))
     body = _render_diff(result)
     assert "[!WARNING]" in body
-    assert "ERC has no rule against" in body
+    assert "reversing a polarised part is legal wiring" in body
     assert "C1 on" in body
+
+
+def test_a_repin_on_a_connector_is_reported_without_a_warning() -> None:
+    """Measured on a real board: 14 re-pins, no defects. Warning on those is noise."""
+    parts = [Component("J2", lib_id="Connector_Generic:Conn_01x02"), Component("R9")]
+    before = build_netlist([Net("A", frozenset({Node("J2", "1"), Node("R9", "1")}))], parts)
+    after = build_netlist([Net("A", frozenset({Node("J2", "2"), Node("R9", "1")}))], parts)
+    body = _render_diff(diff_netlists(before, after))
+    assert "[!WARNING]" not in body
+    assert "Pins re-assigned" in body
 
 
 def test_an_ordinary_change_renders_without_the_warning() -> None:

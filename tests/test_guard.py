@@ -16,7 +16,7 @@ def _rail(plus_on: str, minus_on: str):
     nets[minus_on].append(Node("C1", "2"))
     return build_netlist(
         [Net(name=k, nodes=frozenset(v)) for k, v in nets.items()],
-        [Component("C1"), Component("R1")],
+        [Component("C1", lib_id="Device:C_Polarized"), Component("R1", lib_id="Device:R")],
     )
 
 
@@ -43,7 +43,7 @@ def test_guard_fails_when_the_command_reverses_a_part(tmp_path: Path) -> None:
 
     assert not result.ok
     assert result.command.ok, "the command itself succeeded -- that is the point"
-    assert {s.ref for s in result.diff.pin_swaps} == {"C1"}
+    assert {s.ref for s in result.diff.suspicious} == {"C1"}
 
 
 def test_guard_fails_when_the_contract_is_violated(tmp_path: Path) -> None:

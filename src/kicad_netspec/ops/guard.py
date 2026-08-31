@@ -41,7 +41,7 @@ class GuardResult:
             return False
         if self.check is not None and self.check.verdict != "pass":
             return False
-        return not self.diff.pin_swaps
+        return not self.diff.suspicious
 
 
 def guard(
