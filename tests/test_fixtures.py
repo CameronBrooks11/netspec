@@ -148,3 +148,47 @@ def test_reversed_polarized_cap_is_backwards_and_erc_cannot_help() -> None:
 def test_fixture_ground_truth_is_stable(fixture: str, connected: int) -> None:
     """Guards the fixtures themselves against silent drift."""
     assert len(_netlist(fixture).connected_nets) == connected
+
+
+# --------------------------------------------------------------------------------------
+# The diff, on real files. This pair is the argument for the project in one command.
+# --------------------------------------------------------------------------------------
+
+
+def test_diffing_a_correct_board_against_the_reversed_one_names_the_defect() -> None:
+    """Two schematics that ERC cannot tell apart, and the exact difference between them.
+
+    ``polarized_cap_correct`` wires the rail to C1 pin 1 (+).
+    ``reversed_polarized_cap`` wires it to C1 pin 2 (-).
+
+    KiCad's ERC reports the same two violations for both, because reversing a polarised
+    capacitor is legal wiring. The netlist diff names it.
+    """
+    from kicad_netspec.diff import diff_netlists
+
+    result = diff_netlists(_netlist("polarized_cap_correct"), _netlist("reversed_polarized_cap"))
+
+    (swap,) = result.pin_swaps
+    assert swap.ref == "C1"
+    assert (swap.was.pin, swap.now.pin) == ("1", "2")
+    assert swap.polarity_risk
+
+    assert [str(n) for n in result.now_floating] == ["C1.1"], "the + terminal came free"
+    assert len(result.structural) == 1, "one edit reads as one change"
+
+
+def test_a_board_falling_apart_reads_as_floating_pins_not_net_churn() -> None:
+    """Losing every connection is 7 floating pins, not 3 removals and 7 additions."""
+    from kicad_netspec.diff import diff_netlists
+
+    result = diff_netlists(_netlist("good_ldo"), _netlist("dangling_wires"))
+    assert len(result.now_floating) == 7
+    assert len(result.structural) == 3, "the three real nets went away"
+    assert not result.pin_swaps
+
+
+def test_a_netlist_does_not_differ_from_itself() -> None:
+    from kicad_netspec.diff import diff_netlists
+
+    for name in ("good_ldo", "dangling_wires", "swapped_pins", "reversed_polarized_cap"):
+        assert diff_netlists(_netlist(name), _netlist(name)).empty

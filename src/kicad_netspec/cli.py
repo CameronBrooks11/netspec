@@ -17,7 +17,9 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from kicad_netspec import __version__
+from kicad_netspec import __version__, snapshot
+from kicad_netspec.diff import NetlistDiff, diff_netlists
+from kicad_netspec.model import Netlist
 from kicad_netspec.oracle import Cli10Backend, EnvironmentError_, find_kicad_cli
 
 EXIT_OK = 0
@@ -63,6 +65,19 @@ def _parser() -> argparse.ArgumentParser:
     )
     netlist.set_defaults(handler=_netlist)
 
+    snap = subs.add_parser("snap", help="record connectivity as stable JSON")
+    snap.add_argument("schematic", type=Path)
+    snap.add_argument("-o", "--output", type=Path, required=True)
+    snap.add_argument("--variant", default=None)
+    snap.set_defaults(handler=_snap)
+
+    d = subs.add_parser("diff", help="what changed between two readings of a design")
+    d.add_argument("before", type=Path, help="a snapshot, or a schematic")
+    d.add_argument("after", type=Path, help="a snapshot, or a schematic")
+    d.add_argument("--variant", default=None)
+    d.add_argument("--exit-zero", action="store_true", help="report changes but always exit 0")
+    d.set_defaults(handler=_diff)
+
     return parser
 
 
@@ -98,6 +113,85 @@ def _netlist(args: argparse.Namespace) -> int:
         print("\n  nothing in this schematic is connected to anything.")
         return EXIT_VIOLATION
     return EXIT_OK
+
+
+def _snap(args: argparse.Namespace) -> int:
+    netlist = Cli10Backend().netlist(args.schematic, variant=args.variant)
+    out = snapshot.write(netlist, args.output)
+    print(f"{out}  ({len(netlist.components)} components, {len(netlist.nets)} nets)")
+    return EXIT_OK
+
+
+def _load_side(path: Path, variant: str | None) -> Netlist:
+    """Accept either a snapshot or a design, so `diff` needs no flags to say which."""
+    if path.suffix == ".json":
+        try:
+            return snapshot.read(path)
+        except snapshot.SnapshotError as exc:
+            raise EnvironmentError_(str(exc)) from exc
+    return Cli10Backend().netlist(path, variant=variant)
+
+
+def _diff(args: argparse.Namespace) -> int:
+    before = _load_side(args.before, args.variant)
+    after = _load_side(args.after, args.variant)
+    result = diff_netlists(before, after)
+    _print_diff(result)
+    if args.exit_zero or result.empty:
+        return EXIT_OK
+    return EXIT_VIOLATION
+
+
+def _print_diff(result: NetlistDiff) -> None:
+    if result.empty and not result.benign:
+        print("no change in connectivity")
+        return
+
+    if result.structural:
+        print("NET CHANGES")
+        for change in result.structural:
+            print(f"  {change}")
+
+    if result.component_changes:
+        print("\nCOMPONENTS")
+        for change in result.component_changes:
+            print(f"  {change}")
+
+    if result.now_floating or result.no_longer_floating:
+        print("\nFLOATING PINS")
+        for node in result.now_floating:
+            print(f"  ! {node}  is no longer connected to anything")
+        for node in result.no_longer_floating:
+            print(f"  + {node}  is now connected")
+
+    if result.pin_swaps:
+        print("\nPIN SWAPS  (a connection moved between pins of one part)")
+        for swap in result.pin_swaps:
+            print(f"  {swap}")
+
+    if result.benign:
+        print(f"\n{len(result.benign)} net(s) renamed with no change in membership")
+
+    print()
+    if result.empty:
+        print("no change in connectivity")
+        return
+    bits = []
+    if result.structural:
+        bits.append(f"{len(result.structural)} net change(s)")
+    if result.component_changes:
+        bits.append(f"{len(result.component_changes)} component change(s)")
+    if result.now_floating:
+        bits.append(f"{len(result.now_floating)} pin(s) newly floating")
+    risky = [s for s in result.pin_swaps if s.polarity_risk]
+    if result.pin_swaps:
+        bits.append(f"{len(result.pin_swaps)} pin swap(s)")
+    print("CHANGED  " + ", ".join(bits))
+    if risky:
+        print(
+            f"\nWARNING: {len(risky)} pin swap(s) on a two-pin part. If any is polarised, "
+            "it is now backwards, and ERC will not tell you."
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

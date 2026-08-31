@@ -2,8 +2,9 @@
 
 **Verify PCB connectivity against declared engineering intent, using KiCad as the oracle.**
 
-> **Status: pre-alpha, unreleased.** `doctor` and `netlist` work; `check`, `diff` and
-> `guard` do not exist yet. The design lives in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+> **Status: pre-alpha, unreleased.** `doctor`, `netlist`, `snap` and `diff` work;
+> `check` and `guard` do not exist yet. The design lives in
+> [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 Every tool that edits a KiCad design reports on its own arithmetic. Only KiCad knows what
 a design actually *is*. `netspec` asks it — after every change — and fails loudly when
@@ -12,10 +13,11 @@ intent and reality diverge.
 ```sh
 netspec doctor                                     # find and probe a KiCad engine
 netspec netlist board.kicad_sch                    # what KiCad says is connected
+netspec snap board.kicad_sch -o before.json        # record connectivity, stably
+netspec diff before.json board.kicad_sch           # what actually changed
 
 # not built yet
 netspec check board.kicad_sch                      # assert a contract
-netspec diff before.json board.kicad_sch           # what actually changed
 netspec guard board.kicad_sch -- <any tool>        # snapshot, run, re-read, adjudicate
 ```
 
@@ -48,6 +50,25 @@ does:
 
 Each is frozen as a regression test in [`tests/fixtures/`](tests/fixtures), paired with
 the netlist KiCad itself derived from it.
+
+Two of those fixtures are the same circuit, wired correctly and wired backwards. KiCad's
+ERC reports **the same two violations for both** -- reversing a polarised capacitor is
+legal wiring, so no rule fires. `netspec` names it:
+
+```
+$ netspec diff polarized_cap_correct.kicad_sch reversed_polarized_cap.kicad_sch
+NET CHANGES
+  ~ Net-(C1-Pad2)  +C1.2 -C1.1
+
+FLOATING PINS
+  ! C1.1  is no longer connected to anything
+
+PIN SWAPS  (a connection moved between pins of one part)
+  C1 on Net-(C1-Pad2): pin 1 -> pin 2  <- reverses a 2-pin part
+
+WARNING: 1 pin swap(s) on a two-pin part. If any is polarised, it is now backwards,
+and ERC will not tell you.
+```
 
 ## Family
 
