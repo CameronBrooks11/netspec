@@ -1,0 +1,30 @@
+# Comment on every pull request with what actually changed in the board's connectivity.
+#
+# Copy to .github/workflows/connectivity.yml in a board repo.
+
+name: Connectivity
+
+on:
+  pull_request:
+    paths:
+      - "**/*.kicad_sch"
+
+jobs:
+  connectivity:
+    runs-on: ubuntu-latest
+    # KiCad has to be present. This image is the same family KiBot users already run.
+    container: ghcr.io/inti-cmnb/kicad10_auto:latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The base revision must be in the clone or there is nothing to compare to.
+          fetch-depth: 0
+
+      - uses: CameronBrooks11/netspec@v0
+        with:
+          schematic: hardware/board.kicad_sch
+          # Optional: also adjudicate a contract against the head revision.
+          # contract: hardware/contract.py

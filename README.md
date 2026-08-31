@@ -113,6 +113,37 @@ CONTRACT
 Exit codes are the contract: `0` clean, `1` a violation of the design, `4` an
 environment fault -- a missing engine is never reported as a broken board.
 
+## In CI
+
+A GitHub Action that comments on a pull request with the connectivity delta -- something
+no PCB team has and most would want, agent or no agent:
+
+```yaml
+- uses: CameronBrooks11/netspec@v0
+  with:
+    schematic: hardware/board.kicad_sch
+    contract: hardware/contract.py   # optional
+```
+
+It needs KiCad, so run the job in a KiCad container -- see
+[`examples/workflows/connectivity.yml`](examples/workflows/connectivity.yml). The comment
+is updated in place rather than stacked per push, and a missing engine reports that it
+checked nothing rather than failing the board.
+
+## In your test suite
+
+Installing the package registers a pytest plugin; no conftest needed:
+
+```python
+from kicad_netspec.pytest_plugin import assert_net, assert_polarity
+
+
+def test_the_bulk_cap_is_the_right_way_round(netlist):
+    assert_polarity(netlist("hardware/board.kicad_sch"), "C1", plus="VIN", minus="GND")
+```
+
+Without KiCad on the machine, those tests **skip** rather than fail.
+
 ## Family
 
 - **[partspec](https://github.com/CameronBrooks11/partspec)** — mechanical CAD parts vs declared intent

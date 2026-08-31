@@ -29,13 +29,37 @@ def _in_oracle(path: Path) -> bool:
     return "oracle" in path.relative_to(SRC).parts
 
 
+def _docstrings(tree: ast.AST) -> set[int]:
+    """Ids of string constants that are docstrings, which may say anything."""
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            body = getattr(node, "body", None)
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+                out.add(id(body[0].value))
+    return out
+
+
 def test_kicad_is_only_invoked_from_the_oracle() -> None:
-    """No KiCad binary is named outside oracle/, so the IPC backend stays one file."""
-    offenders = [
-        p.relative_to(SRC)
-        for p in _py_files()
-        if not _in_oracle(p) and "kicad-cli" in p.read_text(encoding="utf-8")
-    ]
+    """No KiCad binary is named in runnable code outside oracle/ (D4).
+
+    Docstrings are exempt: prose explaining the rule is not a breach of it. What this
+    catches is a hardcoded command somewhere that should be going through the oracle.
+    """
+    offenders = []
+    for p in _py_files():
+        if _in_oracle(p):
+            continue
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        exempt = _docstrings(tree)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and id(node) not in exempt
+                and ("kicad-cli" in node.value or "flatpak" in node.value)
+            ):
+                offenders.append((p.relative_to(SRC), node.value[:40]))
     assert not offenders, (
         f"KiCad must only be reachable through the Oracle protocol; found in {offenders}"
     )

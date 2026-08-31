@@ -1,0 +1,103 @@
+name: netspec
+description: Comment on a pull request with what actually changed in a board's connectivity.
+author: Cameron Brooks
+
+# Needs `kicad-cli` on PATH. The simplest way is to run the job in a KiCad container:
+#
+#   jobs:
+#     connectivity:
+#       runs-on: ubuntu-latest
+#       container: ghcr.io/inti-cmnb/kicad10_auto:latest
+#       permissions: { contents: read, pull-requests: write }
+#       steps:
+#         - uses: actions/checkout@v4
+#           with: { fetch-depth: 0 }
+#         - uses: CameronBrooks11/netspec@v0
+#           with:
+#             schematic: hardware/board.kicad_sch
+#
+# `fetch-depth: 0` matters: the base revision has to be in the clone for there to be
+# anything to compare against.
+
+branding:
+  icon: git-pull-request
+  color: green
+
+inputs:
+  schematic:
+    description: Path to the .kicad_sch to compare. Repeat as newline-separated entries for several.
+    required: true
+  contract:
+    description: Optional contract module to adjudicate against the head revision.
+    required: false
+    default: ""
+  base-ref:
+    description: Revision to compare against. Defaults to the pull request's base.
+    required: false
+    default: ""
+  comment:
+    description: Post the result as a pull request comment.
+    required: false
+    default: "true"
+  fail-on-change:
+    description: >-
+      Fail the job on any connectivity change. Off by default -- changing the design is
+      usually the point of the pull request. A violated contract or a suspected pin swap
+      fails regardless.
+    required: false
+    default: "false"
+  netspec-version:
+    description: Version specifier to install.
+    required: false
+    default: "kicad-netspec"
+
+outputs:
+  changed:
+    description: "true when connectivity differs from the base revision"
+    value: ${{ steps.run.outputs.changed }}
+  suspicious:
+    description: "true when a change carries the signature of a defect"
+    value: ${{ steps.run.outputs.suspicious }}
+  report:
+    description: The rendered Markdown report
+    value: ${{ steps.run.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install netspec
+      shell: bash
+      run: python3 -m pip install --quiet --disable-pip-version-check ${{ inputs.netspec-version }}
+
+    - name: Compare connectivity
+      id: run
+      shell: bash
+      env:
+        NETSPEC_SCHEMATICS: ${{ inputs.schematic }}
+        NETSPEC_CONTRACT: ${{ inputs.contract }}
+        NETSPEC_BASE_REF: ${{ inputs.base-ref || github.event.pull_request.base.sha }}
+        NETSPEC_FAIL_ON_CHANGE: ${{ inputs.fail-on-change }}
+      run: python3 -m kicad_netspec.ci
+
+    - name: Comment on the pull request
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const body = process.env.NETSPEC_REPORT;
+          if (!body || !body.trim()) return;
+          const marker = '<!-- netspec-connectivity -->';
+          const { owner, repo } = context.repo;
+          const issue_number = context.issue.number;
+          const existing = await github.paginate(github.rest.issues.listComments, {
+            owner, repo, issue_number,
+          });
+          // Update in place rather than stacking a comment per push.
+          const mine = existing.find((c) => c.body && c.body.includes(marker));
+          if (mine) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }
+      env:
+        NETSPEC_REPORT: ${{ steps.run.outputs.report }}

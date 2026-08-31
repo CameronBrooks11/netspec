@@ -20,6 +20,9 @@ mcp = ["mcp>=1.27,<2"]
 [project.scripts]
 netspec = "kicad_netspec.cli:main"
 
+[project.entry-points.pytest11]
+netspec = "kicad_netspec.pytest_plugin"
+
 [project.urls]
 Homepage = "https://github.com/CameronBrooks11/netspec"
 Issues = "https://github.com/CameronBrooks11/netspec/issues"
