@@ -19,6 +19,7 @@ mcp = ["mcp>=1.27,<2"]
 
 [project.scripts]
 netspec = "kicad_netspec.cli:main"
+netspec-mcp = "kicad_netspec.mcp:main"
 
 [project.entry-points.pytest11]
 netspec = "kicad_netspec.pytest_plugin"

@@ -22,7 +22,10 @@ def test_never_imports_pcbnew() -> None:
 
 # Modules permitted to spawn a process for reasons unrelated to KiCad (D4.1).
 # Adding to this list is a design change; argue for it in docs/DECISIONS.md first.
-SPAWN_EXEMPT = {"ops/run.py"}
+#
+#   ops/run.py  runs the command `guard` was pointed at
+#   mcp.py      runs the netspec CLI, one process per call (D18)
+SPAWN_EXEMPT = {"ops/run.py", "mcp.py"}
 
 
 def _in_oracle(path: Path) -> bool:

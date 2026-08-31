@@ -153,6 +153,28 @@ def test_the_bulk_cap_is_the_right_way_round(netlist):
 
 Without KiCad on the machine, those tests **skip** rather than fail.
 
+## For an agent
+
+An MCP server ships in the `mcp` extra — six stateless verbs, one process per call:
+
+```sh
+pip install 'kicad-netspec[mcp]'
+```
+
+```json
+{ "mcpServers": { "netspec": { "command": "netspec-mcp" } } }
+```
+
+`doctor` · `netlist` · `snapshot` · `diff` · `check` · `gate`. The whole tool list costs
+**~834 tokens** of schema, and CI fails if it exceeds 3,000 — surveyed KiCad MCP servers
+range from 2,574 to 48,627, the largest spending a quarter of a 200K window before the
+agent reads a file.
+
+Every reply carries the exit code and what it means, so an agent cannot confuse *"I could
+not look"* with *"your board is broken"*. `guard` is deliberately **not** exposed: it runs
+an arbitrary command, and an agent that can already run commands gains nothing from
+being handed a shell by a verification tool.
+
 ## Family
 
 - **[partspec](https://github.com/CameronBrooks11/partspec)** — mechanical CAD parts vs declared intent
