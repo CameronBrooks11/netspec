@@ -495,28 +495,49 @@ design. The tests asserting this check *parsed values* — that no field holds a
 net code — rather than attribute names: an earlier version checked ``hasattr(Net,
 "code")`` and passed happily while a scratch build carried both under other spellings.
 
-## D23 — The report is data, its ids are keys, and a contract cannot write it
+## D23 — The report is data; its ids are keys; and it is only as good as the contract
 
 D2 states the product as "a persisted, schema'd report and an exit code that gates CI".
 Only the exit code existed: a result's rule was a rendered English sentence, no command
 emitted JSON, and the MCP ``check`` tool handed an agent the printed text. Three
-primitives of prose can be read; nine cannot.
+primitives of prose can be read; nine cannot. ``netspec check --format json`` now emits a
+self-describing document and the MCP tool returns it parsed, with the sentence surviving
+as ``text`` beside the fields a machine wants.
 
-``netspec check --format json`` now emits a self-describing document and the MCP tool
-returns it parsed. The sentence survives as ``text``, one field beside the fields a
-machine wants.
+### The trust boundary, stated plainly
 
-**A contract cannot write its own report.** A contract is executed Python (D8), and it
-used to execute onto the same stdout the report is written to — so a contract could
-``print`` a passing report, ``sys.exit(0)``, and have the MCP server hand that to an agent
-as netspec's verdict with kicad-cli never run. That is precisely the failure this project
-exists to catch, occurring inside the tool that catches it. Two locks now: contract output
-is redirected to stderr while the module loads, and the MCP layer requires the document to
-identify itself (``command == "check"``, integer schema) rather than accepting whatever
-JSON appeared. Either lock alone would do; both is cheap.
+**A contract is code, and the report is exactly as trustworthy as the contract.**
 
-**The ``id`` is a key, enforced rather than hoped for.** It is ``kind:subject``, and D8's
-"semantic report diff that reports removed assertions" needs two reports to align:
+D8 chose that: ``netspec check`` imports and executes the module it is given. The
+consequence was not written down until three review passes made it concrete. A contract
+executes *before* the design is read, so it can do anything this process can — including
+replacing the oracle:
+
+    Cli10Backend.netlist = _returns_a_board_I_made_up
+
+after which netspec emits a **genuine** report — its own ``check_report``, its own ids, a
+real ``kicad_version`` — about a file whose entire contents are ``this is not a schematic
+at all``. No validation of the report's shape can detect that, because netspec really did
+produce it. It defeats the text format identically, so this is not a JSON problem.
+
+An earlier draft of this entry claimed "a contract cannot write its own report". That was
+false, and the guards behind it were defeated five ways: ``os.write(1, …)``, rebinding
+``sys.__stdout__``, ``os.dup2``, a subprocess inheriting fd 1, and the oracle patch above.
+Claiming a property netspec cannot deliver is worse than having no property at all, so
+the claim is withdrawn rather than patched.
+
+**What the guards actually do** is stop a contract corrupting the report *by accident*: a
+stray ``print`` goes to stderr, and the MCP layer requires the document to identify itself
+rather than reading whatever JSON appeared on stdout. Both are worth keeping and neither
+is a security boundary. The real answer is process isolation — execute the contract in a
+child that returns serialised rules rather than a live ``Spec``, and read the netlist
+before executing anything. **That is not built.** Until it is, treat a contract as you
+would any executable you are about to run.
+
+### The id is a key, enforced rather than hoped for
+
+``kind:subject``. D8's "semantic report diff that reports removed assertions" needs two
+reports to align:
 
 ===============================  ==========================================
 same rule, run again             same id
@@ -525,35 +546,48 @@ rule about a different subject   different id
 rule deleted                     id absent
 ===============================  ==========================================
 
-Two things were required to make that true rather than approximately true. ``Spec``
-**refuses two rules sharing a kind and subject**, because the obvious id-keyed comparator
-keeps only the last — so an agent could smuggle a weak assertion in beside a strong one
-and the strong one would vanish from the comparison while still being enforced. And
-``forbid``'s subject is **JSON-encoded, not joined on a separator**: KiCad accepts ``|``
-and ``:`` inside a net name, so ``forbid("A|B", "C")`` and ``forbid("A", "B|C")`` keyed
-identically. Its body is sorted along with its subject, since canonicalising the key while
-leaving the body unsorted made two identical contracts align and then report a change.
+That is only true if nothing shares a key, so ``Spec`` enforces it. Two rules with one
+kind and subject would otherwise let an agent smuggle a weak assertion in beside a strong
+one — the obvious id-keyed comparator, which every reviewer independently wrote, keeps the
+last and the strong rule vanishes from the comparison while still being enforced. ``kind``
+comes from a ``ClassVar`` that ``describe()`` cannot override, since the two diverging
+gave one key to ``Spec`` and another to the report. ``spec:`` is reserved for netspec's own
+Spec-level findings. Validation lives on the ``Net`` dataclass, not in the ``net()`` helper,
+because the dataclass is exported and the helper was walk-aroundable.
 
-**A known limit, stated rather than papered over.** Dropping a net from a ``forbid``
-changes its subject, so it reads as a deletion plus an addition rather than as a
-weakening — even though the assertion now permits a short it previously banned. A
-set-valued assertion has no stable key smaller than the set. The report-diff tool will
-have to notice overlapping subjects; the report cannot do it alone.
+**Two ``at least`` rules about one net compose rather than conflict.** "At least A" and "at
+least B" is "at least A, B", and refusing them broke a real shape: a contract assembled
+from per-subsystem rule lists, where two independently authored blocks each name their own
+pins on a shared rail and neither can know the other's. Anything else about one subject is
+a contradiction and is refused.
 
-**D8 is still not closed.** The report makes the diff possible and the tests demonstrate a
-removal is detectable, but the tool that performs the comparison does not exist. Both
-review passes independently wrote their own comparator to test this, which is the evidence
-that it is missing.
+``forbid``'s subject is **JSON-encoded, not joined on a separator**. KiCad accepts ``|``,
+``"``, ``\`` and unicode escapes inside a net name — verified by round-tripping each
+through real kicad-cli — so ``forbid("A|B", "C")`` and ``forbid("A", "B|C")`` keyed
+identically. Its body is sorted with its subject; canonicalising the key alone made two
+identical contracts align and then report a change.
 
-**Smaller things the reviews earned.** ``verdict_reason``, because ``verdict: fail`` beside
-``fail: 0`` was a puzzle solvable only by knowing D9. ``contract`` and ``name``, because two
-entirely different contracts otherwise produced byte-identical reports — poor footing for a
-document whose job is noticing tampering. Synthetic results are ``kind: "spec"`` with real
-subjects rather than a ``none`` that read as *absence* when it meant *not-a-rule*. The rule's
-fields are spread **before** the report's own, so a rule cannot overwrite its own ``status``.
-And ``snapshot.loads`` refuses a check report: both are JSON with a ``schema``, and ``netspec
-diff`` on two reports used to answer "no change in connectivity" with exit 0 — green,
-confident, and about a different question than the one asked.
+**A known limit.** Dropping a net from a ``forbid`` changes its subject, so it reads as a
+deletion plus an addition rather than a weakening — though the assertion now permits a
+short it previously banned. A set-valued assertion has no stable key smaller than the set;
+the report-diff tool will have to notice overlapping subjects.
+
+### D8 is still not closed
+
+The report makes the diff possible and the tests show a removal is detectable, but the
+tool that performs the comparison does not exist. Every review pass wrote its own
+comparator to test this, which is the evidence that it is missing.
+
+### Smaller things the reviews earned
+
+``verdict_reason``, because ``verdict: fail`` beside ``fail: 0`` was solvable only by
+already knowing D9. ``contract`` and ``name``, because two entirely different contracts
+otherwise produced byte-identical reports. Synthetic results are ``kind: "spec"`` with real
+subjects, not a ``none`` that read as *absence* where it meant *not-a-rule*. Exit 4 carries
+no report, because an environment fault is not a verdict. And ``snapshot.loads`` requires a
+``nets`` key rather than blacklisting one intruder: both a report and a snapshot are JSON
+with a ``schema``, and ``netspec diff`` on two reports used to answer "no change in
+connectivity" with exit 0 — green, confident, and about a different question.
 
 ## D14 — Name: `netspec`
 

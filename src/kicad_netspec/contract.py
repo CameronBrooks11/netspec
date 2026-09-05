@@ -104,6 +104,14 @@ class Net(Rule):
 
     kind: ClassVar[str] = "net"
 
+    def __post_init__(self) -> None:
+        # On the dataclass, not only in net(): Net is exported, so validating in the
+        # helper alone left `Net(name="VIN", pins=())` as a way in.
+        if not self.name:
+            raise ValueError("a net rule needs a net name")
+        if not self.pins:
+            raise ValueError(f"net {self.name!r} lists no pins, so it asserts nothing")
+
     def net_names(self) -> tuple[str, ...]:
         return (self.name,)
 
@@ -178,6 +186,24 @@ class Forbid(Rule):
         return f"{' and '.join(sorted(self.nets))} must stay separate"
 
 
+def _merge(first: Rule, second: Rule) -> Rule | None:
+    """Combine two rules about one subject, or None when they genuinely conflict.
+
+    Two ``exact=False`` net rules compose by union -- "at least A" and "at least B" is
+    "at least A, B" -- and refusing them would break a real shape: a contract assembled
+    from per-subsystem rule lists, where two independently authored blocks each name
+    their own pins on a shared rail and neither can know the other's. Anything else is a
+    contradiction, and the id can only be a key if one subject means one assertion.
+    """
+    if isinstance(first, Net) and isinstance(second, Net) and not (first.exact or second.exact):
+        return Net(
+            name=first.name,
+            pins=first.pins + tuple(p for p in second.pins if p not in first.pins),
+            exact=False,
+        )
+    return None
+
+
 @dataclass(frozen=True)
 class Spec:
     """One design and everything asserted about it."""
@@ -216,14 +242,25 @@ class Spec:
             # key destroy the property -- and worse, they are how an agent could smuggle
             # a weak assertion in beside a strong one, since the obvious id-keyed
             # comparator keeps only the last. Refuse rather than let the guarantee rot.
-            key = (rule.kind, str(rule.describe().get("subject", "")))
-            if key in seen:
+            if rule.kind == "spec":
                 raise ValueError(
-                    f"two {rule.kind} rules about {key[1]!r}: {seen[key]} / {rule}. "
-                    "Combine them; a contract states one thing per subject."
+                    f"{type(rule).__name__} claims kind 'spec', which netspec reserves "
+                    "for its own Spec-level findings"
                 )
+            # Normalised exactly as the report normalises it, so "" and "unknown" cannot
+            # be two keys here and one there.
+            key = (rule.kind or "unknown", str(rule.describe().get("subject", "")))
+            if key in seen:
+                merged = _merge(seen[key], rule)
+                if merged is None:
+                    raise ValueError(
+                        f"two {key[0]} rules about {key[1]!r}: {seen[key]} / {rule}. "
+                        "A contract states one thing per subject."
+                    )
+                seen[key] = merged
+                continue
             seen[key] = rule
-        object.__setattr__(self, "rules", tuple(self.rules))
+        object.__setattr__(self, "rules", tuple(seen.values()))
 
     def __str__(self) -> str:
         return f"Spec({self.name or self.source}, {len(self.rules)} rules)"
@@ -237,15 +274,9 @@ def net(name: str, pins: Iterable[str], *, exact: bool = True) -> Net:
 
     ``exact=False`` asserts only that the listed pins are present, allowing others.
     """
-    if not name:
-        raise ValueError("net() needs a net name")
-    listed = tuple(pins)
-    if not listed:
-        # "carries at least nothing" is true of every net; "carries exactly nothing" is
-        # true of none. Either way the rule cannot discriminate, and a contract full of
-        # them reports a confident pass while asserting no connectivity at all.
-        raise ValueError(f"net({name!r}) lists no pins, so it asserts nothing")
-    return Net(name=name, pins=listed, exact=exact)
+    # "carries at least nothing" is true of every net and "carries exactly nothing" of
+    # none, so a rule with no pins cannot discriminate; Net.__post_init__ refuses both.
+    return Net(name=name, pins=tuple(pins), exact=exact)
 
 
 def polarity(

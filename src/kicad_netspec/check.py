@@ -140,7 +140,9 @@ def _adjudicate(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult
     it is reported before the rule runs rather than resolved by guesswork. Absence is
     left to the rule: for ``forbid`` a vanished net is the answer, not an obstacle.
     """
-    described = {"kind": rule.kind, **rule.describe()}
+    # kind LAST: a describe() returning its own kind could otherwise diverge from
+    # the ClassVar Spec dedupes on, producing two rules Spec accepts and one id.
+    described = {**rule.describe(), "kind": rule.kind}
 
     problems = resolved.problems_for(rule)
     if problems:

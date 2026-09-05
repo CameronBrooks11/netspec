@@ -109,6 +109,11 @@ def _from_json(payload: Any) -> Netlist:
             f"this is a netspec {payload['command']!r} report, not a snapshot. "
             "`diff` compares connectivity; it cannot compare reports."
         )
+    if "nets" not in payload:
+        # Requiring what a snapshot HAS, rather than blacklisting one known intruder: a
+        # truncated file or any unrelated .json carrying a schema loaded as an empty
+        # netlist, and `diff` then reported "no change in connectivity" with exit 0.
+        raise SnapshotError("not a netspec snapshot (no nets)")
 
     schema = payload.get("schema")
     if schema is None:

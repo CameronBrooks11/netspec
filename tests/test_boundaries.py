@@ -188,3 +188,17 @@ def test_every_rule_describes_a_subject_and_stays_json_safe() -> None:
         described = rule.describe()
         assert described.get("subject"), f"{rule.kind} describes no subject"
         json.dumps(described)  # a tuple or frozenset would raise here
+
+
+def test_the_mcp_check_tool_states_the_contract_trust_boundary() -> None:
+    """A contract owns the process, so the report is only as trustworthy as the contract.
+
+    That cannot be fixed by validation and is not fixed here. An agent reading the tool
+    description must be told, so this asserts the warning stays put until the day process
+    isolation makes it untrue.
+    """
+    from kicad_netspec import mcp
+
+    text = (SRC / "mcp.py").read_text(encoding="utf-8")
+    assert "as trustworthy as the contract" in text
+    assert mcp.build_server  # the tool this describes still exists

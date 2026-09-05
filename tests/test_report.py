@@ -179,12 +179,15 @@ def test_both_formats_agree_on_the_verdict(fmt: str) -> None:
 # -- what two adversarial reviews found ---------------------------------------------------
 
 
-def test_a_contract_cannot_write_its_own_report(tmp_path) -> None:
-    """The critical one. A contract is executed Python (D8) sharing netspec's stdout.
+def test_a_stray_print_in_a_contract_does_not_become_the_report(tmp_path) -> None:
+    """Contract output goes to stderr, so it cannot be mistaken for netspec's verdict.
 
-    It could print a passing report and exit 0, and the MCP server handed that to an
-    agent as netspec's verdict -- with kicad-cli never run. That is the failure this
-    project exists to catch, occurring inside the tool that catches it.
+    Named for what it actually guarantees. This stops a contract corrupting the report
+    by ACCIDENT. It does not stop one that means to: a contract is executed Python (D8)
+    and owns the process, so `os.write(1, ...)`, rebinding `sys.__stdout__`, or simply
+    replacing the oracle all still work. The last of those makes netspec emit a genuine
+    report about a board the contract invented, which no validation can detect. See D23;
+    the real answer is process isolation and it is not built.
     """
     import subprocess
     import sys as _sys
@@ -291,3 +294,95 @@ def test_a_rule_that_asserts_nothing_is_refused() -> None:
         net("VIN", [])
     with pytest.raises(ValueError, match="needs a net name"):
         net("", ["R1.1"])
+
+
+def test_an_environment_fault_carries_no_report() -> None:
+    """Exit 4 means netspec could not look, so whatever is on stdout is not its verdict."""
+    from kicad_netspec.mcp import _with_report
+
+    out = _with_report(
+        {"exit_code": 4, "output": '{"command": "check", "schema": 1}', "error": "x"}
+    )
+    assert "report" not in out
+    assert out["report_unavailable"]
+
+
+def test_a_rule_cannot_diverge_its_kind_from_the_one_spec_deduped_on() -> None:
+    """describe() used to override `kind`, so Spec keyed on one and the report another --
+    two rules Spec accepted, one id in the document, and a comparator dropping a result."""
+    from dataclasses import dataclass
+    from typing import ClassVar
+
+    from kicad_netspec.check import CheckResult
+    from kicad_netspec.contract import Rule
+    from kicad_netspec.report import _result
+
+    @dataclass(frozen=True)
+    class Sneaky(Rule):
+        kind: ClassVar[str] = "sneaky"
+
+        def net_names(self) -> tuple[str, ...]:
+            return ()
+
+        def describe(self):
+            return {"subject": "VIN", "kind": "net"}
+
+        def __str__(self) -> str:
+            return "sneaky"
+
+    described = {**Sneaky().describe(), "kind": Sneaky.kind}
+    out = _result(CheckResult(rule="sneaky", status="fail", data=described))
+    assert out["kind"] == "sneaky", "the ClassVar Spec dedupes on must win"
+    assert out["id"] == "sneaky:VIN"
+
+
+def test_netspec_reserves_the_spec_namespace() -> None:
+    from dataclasses import dataclass
+    from typing import ClassVar
+
+    from kicad_netspec.contract import Rule
+
+    @dataclass(frozen=True)
+    class Squatter(Rule):
+        kind: ClassVar[str] = "spec"
+
+        def net_names(self) -> tuple[str, ...]:
+            return ()
+
+        def describe(self):
+            return {"subject": "no_floating_pins"}
+
+        def __str__(self) -> str:
+            return "squatter"
+
+    with pytest.raises(ValueError, match="reserves"):
+        Spec(source="b", rules=[Squatter()])
+
+
+def test_the_exported_dataclass_cannot_bypass_the_helpers_validation() -> None:
+    from kicad_netspec.contract import Net as NetRule
+
+    with pytest.raises(ValueError, match="asserts nothing"):
+        NetRule(name="VIN", pins=())
+    with pytest.raises(ValueError, match="needs a net name"):
+        NetRule(name="", pins=("R1.1",))
+
+
+def test_two_at_least_rules_about_one_net_compose_rather_than_fail() -> None:
+    """Assembling a contract from per-subsystem lists is a real shape: two blocks each
+    name their own pins on a shared rail, and neither can know the other's."""
+    power = [net("GND", ["R1.2"], exact=False)]
+    analog = [net("GND", ["C1.2"], exact=False)]
+    spec = Spec(source="b", rules=[*power, *analog])
+
+    from kicad_netspec.contract import Net as NetRule
+
+    (rule,) = spec.rules
+    assert isinstance(rule, NetRule)
+    assert set(rule.pins) == {"R1.2", "C1.2"}
+    assert rule.exact is False
+
+
+def test_two_exact_rules_about_one_net_are_still_refused() -> None:
+    with pytest.raises(ValueError, match="two net rules"):
+        Spec(source="b", rules=[net("VIN", ["R1.1"]), net("VIN", ["C1.1"])])
