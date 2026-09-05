@@ -100,6 +100,91 @@ def test_forbid_catches_a_pin_on_both_rails() -> None:
     assert "R1.1 is on both" in report.failures[0].detail
 
 
+# -- forbid: what a short actually looks like ------------------------------------------
+
+
+def _really_shorted():
+    """A short as KiCad emits it: the two nets are MERGED and one name is gone.
+
+    Verified against kicad-cli by relabelling VIN to GND in ``good_ldo.kicad_sch`` --
+    KiCad then reports two nets where there were three. There is no netlist in which a
+    pin sits on two named nets, which is why looking for one never fired.
+    """
+    return build_netlist(
+        [
+            Net(
+                "GND",
+                frozenset({Node("R1", "1"), Node("R1", "2"), Node("C1", "1"), Node("C1", "2")}),
+            )
+        ],
+        [Component("C1", "100uF"), Component("R1", "1k")],
+    )
+
+
+def test_forbid_catches_a_real_short_where_one_net_was_swallowed() -> None:
+    """The regression: a declared-distinct net that vanished IS the short (LVS n:1 merge)."""
+    spec = Spec(source="x", rules=[forbid("VIN", "GND")])
+    report = check_spec(spec, _really_shorted())
+
+    assert report.verdict == "fail"
+    (result,) = report.failures
+    assert result.status == "fail", "a swallowed net is a finding, not a non-result"
+    assert "VIN" in result.detail
+    assert "cannot be shorted" not in result.detail, "the old message said the opposite"
+
+
+def test_forbid_on_nets_that_are_all_absent_still_fails() -> None:
+    """A rule naming nothing real has not been satisfied; it was never tested."""
+    spec = Spec(source="x", rules=[forbid("SDA", "SCL")])
+    report = check_spec(spec, _rail())
+    assert report.verdict == "fail"
+    assert report.results[0].status == "fail"
+
+
+# -- polarity: pins named the way KiCad names them -------------------------------------
+
+
+def _diode(anode_on: str = "VCC", cathode_on: str = "GND"):
+    """A diode whose pins carry KiCad's own function names, as Device:D does."""
+    nets: dict[str, list[Node]] = {"VCC": [], "GND": []}
+    nets[anode_on].append(Node("D1", "1", function="A"))
+    nets[cathode_on].append(Node("D1", "2", function="K"))
+    return build_netlist(
+        [Net(name=k, nodes=frozenset(v)) for k, v in nets.items()],
+        [Component("D1", "1N4148", lib_id="Device:D")],
+    )
+
+
+def test_polarity_accepts_pins_named_by_function() -> None:
+    """Device:D calls its pins A and K. Resolving them is D12; net_of alone cannot."""
+    spec = Spec(
+        source="x", rules=[polarity("D1", plus="VCC", minus="GND", plus_pin="A", minus_pin="K")]
+    )
+    report = check_spec(spec, _diode())
+    assert report.verdict == "pass", "a correctly wired diode must not raise a false alarm"
+
+
+def test_polarity_by_function_still_catches_a_reversed_part() -> None:
+    spec = Spec(
+        source="x", rules=[polarity("D1", plus="VCC", minus="GND", plus_pin="A", minus_pin="K")]
+    )
+    report = check_spec(spec, _diode(anode_on="GND", cathode_on="VCC"))
+    assert report.verdict == "fail"
+    assert "REVERSED" in report.failures[0].detail
+
+
+# -- a contract that asserts nothing ---------------------------------------------------
+
+
+def test_a_contract_with_no_rules_is_not_green() -> None:
+    """all([]) is True, so an empty contract used to exit 0 and protect nothing."""
+    report = check_spec(Spec(source="x", rules=[]), _rail())
+    assert report.verdict == "fail"
+    assert any(
+        "nothing" in r.detail.lower() or "no rules" in r.detail.lower() for r in report.results
+    )
+
+
 # -- the spec object itself ------------------------------------------------------------
 
 
@@ -119,9 +204,19 @@ def test_forbid_needs_two_nets() -> None:
 
 
 def test_require_no_floating_pins_is_opt_in() -> None:
+    """The flag is off by default -- but the contract still has to assert something.
+
+    This used to lean on an empty ``Spec`` being green, which conflated "did not ask
+    for the floating check" with "asserted nothing at all". Only the first is opt-in.
+    """
     floating = build_netlist(
-        [Net("unconnected-(C1-Pad1)", frozenset({Node("C1", "1")}))], [Component("C1")]
+        [
+            Net("VIN", frozenset({Node("C1", "2")})),
+            Net("unconnected-(C1-Pad1)", frozenset({Node("C1", "1")})),
+        ],
+        [Component("C1")],
     )
-    assert check_spec(Spec(source="x"), floating).verdict == "pass"
-    strict = Spec(source="x", require_no_floating_pins=True)
+    rules = [net("VIN", ["C1.2"])]
+    assert check_spec(Spec(source="x", rules=rules), floating).verdict == "pass"
+    strict = Spec(source="x", rules=rules, require_no_floating_pins=True)
     assert check_spec(strict, floating).verdict == "fail"
