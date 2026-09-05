@@ -42,12 +42,19 @@ def parse_kicadxml(text: str, *, source: str = "") -> Netlist:
     if root.tag != "export":
         raise ParseError(f"expected a KiCad <export> netlist, found <{root.tag}>")
 
-    return build_netlist(
-        _nets(root),
-        _components(root),
-        source=source or _source(root),
-        kicad_version=_kicad_version(root),
-    )
+    try:
+        return build_netlist(
+            _nets(root),
+            _components(root),
+            source=source or _source(root),
+            kicad_version=_kicad_version(root),
+        )
+    except ValueError as exc:
+        # The model enforces invariants a netlist must hold (a pin belongs to one net).
+        # A document that breaks one is malformed, and that is an environment fault --
+        # "I could not read this" -- not a finding about the design (D10). Raising it as
+        # ParseError is what lets the oracle report it as one instead of a traceback.
+        raise ParseError(f"malformed netlist: {exc}") from exc
 
 
 def _nets(root: ET.Element) -> list[Net]:

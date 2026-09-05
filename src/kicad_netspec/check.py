@@ -23,7 +23,7 @@ from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Spec
 from kicad_netspec.model import Netlist
 from kicad_netspec.resolve import Resolved, resolve_spec
 
-__all__ = ["CheckReport", "CheckResult", "check_spec", "net_of_pin"]
+__all__ = ["CheckReport", "CheckResult", "check_spec"]
 
 Status = Literal["pass", "fail", "unsupported", "skipped"]
 Verdict = Literal["pass", "fail"]
@@ -100,17 +100,6 @@ def check_spec(spec: Spec, netlist: Netlist) -> CheckReport:
     )
 
 
-def net_of_pin(netlist: Netlist, ref: str, pin: str) -> str | None:
-    """Net a pin sits on, given either its number or KiCad's pin function name.
-
-    ``Netlist.net_of`` is indexed by pin *number* only. Device:D calls its pins ``A``
-    and ``K``, so a contract written the way D12 says to write one -- preferring the
-    function name -- resolved to nothing and reported a correct board as broken.
-    """
-    node = netlist.resolve(f"{ref}.{pin}")
-    return netlist.net_of(node.ref, node.pin) if node else None
-
-
 def _adjudicate(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult:
     """Evaluate one rule, unless its names do not pick out one net each.
 
@@ -178,8 +167,8 @@ def _check_polarity(rule: Polarity, netlist: Netlist, resolved: Resolved) -> Che
     if rule.ref not in netlist.components:
         return CheckResult(rule=label, status="skipped", detail=f"{rule.ref} is not in this design")
 
-    actual_plus = net_of_pin(netlist, rule.ref, rule.plus_pin)
-    actual_minus = net_of_pin(netlist, rule.ref, rule.minus_pin)
+    actual_plus = netlist.net_of(rule.ref, rule.plus_pin)
+    actual_minus = netlist.net_of(rule.ref, rule.minus_pin)
 
     # Compare against what the design calls these nets, so a contract may name a
     # hierarchical net by its leaf the same way it does everywhere else.
@@ -237,19 +226,6 @@ def _check_forbid(rule: Forbid, netlist: Netlist, resolved: Resolved) -> CheckRe
             ),
         )
 
-    # Belt and braces for an oracle that does emit a pin on two nets. KiCad cannot, but
-    # nothing in the model forbids it and the cost of looking is nil.
-    seen: dict[str, str] = {}
-    shared: list[str] = []
-    for name in present:
-        for node in netlist.nets[targets[name] or name].nodes:
-            key = str(node)
-            if key in seen and seen[key] != name:
-                shared.append(f"{key} is on both {seen[key]} and {name}")
-            seen[key] = name
-
-    if shared:
-        return CheckResult(rule=label, status="fail", detail="; ".join(sorted(shared)))
     return CheckResult(rule=label, status="pass")
 
 

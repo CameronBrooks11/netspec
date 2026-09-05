@@ -117,12 +117,23 @@ class Netlist:
     source: str = ""
     kicad_version: str = ""
     _by_pin: Mapping[tuple[str, str], str] = field(default_factory=dict, repr=False)
+    _by_ref: Mapping[str, tuple[Node, ...]] = field(default_factory=dict, repr=False)
 
     # -- lookups ---------------------------------------------------------------
 
     def net_of(self, ref: str, pin: str) -> str | None:
-        """Name of the net a given pin sits on, or None if the pin is unknown."""
-        return self._by_pin.get((ref, pin))
+        """Name of the net a pin sits on, or None if there is no such pin.
+
+        ``pin`` may be a number or the pin's *function* name, on the same terms as
+        :meth:`resolve` -- because a contract that names pins the way D12 recommends
+        should not have to know which of the two this method wanted. It did once, and
+        reported correctly wired diodes as broken for it.
+        """
+        direct = self._by_pin.get((ref, pin))
+        if direct is not None:
+            return direct
+        node = self.resolve(f"{ref}.{pin}")
+        return self._by_pin.get((node.ref, node.pin)) if node else None
 
     def resolve(self, spec: str) -> Node | None:
         """Resolve ``"C1.1"`` or ``"U1.VI"`` to a node.
@@ -146,8 +157,7 @@ class Netlist:
 
     def nodes_of(self, ref: str) -> tuple[Node, ...]:
         """Every node belonging to one component, ordered by pin."""
-        found = (n for net in self.nets.values() for n in net.nodes if n.ref == ref)
-        return tuple(sorted(found))
+        return self._by_ref.get(ref, ())
 
     # -- summaries -------------------------------------------------------------
 
@@ -215,13 +225,33 @@ def build_netlist(
     source: str = "",
     kicad_version: str = "",
 ) -> Netlist:
-    """Assemble a :class:`Netlist`, building the pin index as we go."""
+    """Assemble a :class:`Netlist`, building its lookup indexes as we go.
+
+    Raises ``ValueError`` if a pin appears on two nets. A netlist *partitions* pins
+    into nets -- that is what the structure means, and it is what KiCad emits, shorts
+    included: a short merges the two nets and keeps one of the names rather than
+    leaving a pin in both. Building the index with a dict comprehension silently let
+    one net win by insertion order, which is the wrong answer rather than a slow one.
+    """
     net_map = {n.name: n for n in nets}
-    by_pin = {(node.ref, node.pin): net.name for net in net_map.values() for node in net.nodes}
+    by_pin: dict[tuple[str, str], str] = {}
+    by_ref: dict[str, list[Node]] = {}
+    for net in net_map.values():
+        for node in net.nodes:
+            key = (node.ref, node.pin)
+            if key in by_pin:
+                raise ValueError(
+                    f"{node.ref}.{node.pin} is on both {by_pin[key]!r} and {net.name!r}. "
+                    "A netlist partitions pins into nets, so no pin belongs to two; "
+                    "this reading of the design is malformed."
+                )
+            by_pin[key] = net.name
+            by_ref.setdefault(node.ref, []).append(node)
     return Netlist(
         nets=net_map,
         components={c.ref: c for c in components},
         source=source,
         kicad_version=kicad_version,
         _by_pin=by_pin,
+        _by_ref={ref: tuple(sorted(found)) for ref, found in by_ref.items()},
     )

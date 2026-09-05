@@ -359,6 +359,50 @@ the design", and is still not green. Whether that should instead be a failure �
 whether ``skipped`` survives at all once variant scoping exists — is a separate question
 from name resolution and is deliberately left open here.
 
+## D20 — A netlist partitions pins into nets, and lookups say so
+
+A design review recommended making the pin index many-valued, so that a pin appearing on
+two nets would not silently resolve to whichever net was inserted last. **That
+recommendation was not taken**, because the input it defends against cannot occur, and
+building for it would repeat the mistake it was meant to fix.
+
+A netlist *is* a partition: every pin belongs to exactly one net. That was checked rather
+than assumed — across every fixture in this repo, across a real 135-node board, and
+against a **deliberate dead short** built by relabelling one net to another and asking
+kicad-cli for the result. In every case no pin appeared on two nets, because KiCad
+resolves a short by *merging* the nets and keeping one name.
+
+That is the same premise ``forbid`` originally got wrong: it hunted for a pin on two
+nets, a shape KiCad never emits, and so never fired on a real short. A many-valued index
+would have been a second structure built to serve the same impossible input.
+
+**So the invariant is enforced instead of accommodated.** ``build_netlist`` raises when a
+pin appears twice, and ``parse`` re-raises that as ``ParseError`` so the oracle reports it
+as an environment fault — "I could not read this" — rather than a traceback or, worse, a
+confident answer derived from a coin flip (D10). The dead branch in ``_check_forbid`` that
+searched for the impossible shape is gone, along with the test that constructed it.
+
+**The defect next door was real, and is what actually got fixed.** ``net_of`` took a pin
+identifier and silently returned ``None`` for a pin *function* name, because it read a
+number-keyed dict directly. That is precisely what reported correctly wired diodes as
+broken, and its signature invited every future rule to make the same mistake. ``net_of``
+now resolves on the same terms as ``resolve``.
+
+Doing that naively would have made every lookup a scan, because ``nodes_of`` walked all
+nets. Nodes are now indexed by reference at construction. Measured over 200 lookups:
+
+======  =====================  ====================
+nodes   before                 after
+======  =====================  ====================
+200     3.2 ms                 0.12 ms
+2,000   34.0 ms                0.11 ms
+8,000   144.0 ms               0.12 ms
+======  =====================  ====================
+
+Today's boards are small enough that the old cost was tolerable. It was linear per
+lookup, and the vocabulary being built on top of it — symmetry between repeated blocks,
+reachability, coverage over every pin — asks the question thousands of times.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical
