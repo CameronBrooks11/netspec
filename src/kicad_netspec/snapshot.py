@@ -20,7 +20,14 @@ from kicad_netspec.model import Component, Net, Netlist, Node, build_netlist
 __all__ = ["SNAPSHOT_SCHEMA", "SnapshotError", "dumps", "loads", "read", "write"]
 
 SNAPSHOT_SCHEMA = 1
-"""Bumped only when the on-disk shape changes incompatibly."""
+"""Bumped only when the on-disk shape changes incompatibly.
+
+Note what is *not* here: a net's class and a component's sheet. A snapshot holds what
+the diff compares, and the diff compares membership. Persisting a fact the diff ignores
+would put a repo's committed snapshot in conflict with netspec's own verdict -- a red
+`git diff` beside a green `netspec diff`, with nothing naming the cause -- which is
+exactly the "spurious diff" this module's docstring promises cannot happen.
+"""
 
 
 class SnapshotError(ValueError):

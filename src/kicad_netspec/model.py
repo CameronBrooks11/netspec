@@ -62,6 +62,24 @@ class Net:
     name: str
     nodes: frozenset[Node]
 
+    netclasses: tuple[str, ...] = ()
+    """Every class this net belongs to, in the order KiCad lists them.
+
+    A net can be in several. KiCad writes them joined by commas and always appends
+    ``Default``, so a "Power" net reads ``class="Power,Default"`` -- meaning a rule must
+    test *membership*, never equality. Storing this as a single string invited exactly
+    that mistake.
+
+    **The joining is not escaped**, and KiCad permits a comma inside a class name, so
+    ``class="Power, Fast,Default"`` is ambiguous between one class named ``Power, Fast``
+    and two named ``Power`` and `` Fast``. That information is destroyed by KiCad before
+    netspec sees it and cannot be recovered here; the split is reported as-is, without
+    stripping, so the stray leading space at least survives as a clue.
+
+    Not part of what makes a net *the same net*: the diff compares membership, so a
+    reclassification is not a connectivity change.
+    """
+
     @property
     def anonymous(self) -> bool:
         """True when KiCad generated this name from the net's own contents (D11)."""
@@ -98,6 +116,21 @@ class Component:
     value: str = ""
     footprint: str | None = None
     lib_id: str | None = None
+
+    sheet: str = ""
+    """The sheet KiCad attributes this part to -- ``/`` when flat, ``/Channel1/`` when
+    not. Empty if the netlist omitted it.
+
+    **One value, even for a part whose units sit on different sheets.** KiCad writes a
+    single ``<sheetpath>`` per component and picks it by sheet traversal order, so a dual
+    op-amp straddling two channels is attributed wholly to one of them, and reordering
+    the pages -- an edit with no electrical meaning -- can change which. Read it as "a
+    sheet this part appears on", never as "the sheet this part is on", and do not persist
+    it: it is not stable enough to commit, which is why the snapshot omits it.
+
+    KiCad offers the same path in UUIDs (``tstamps``); that form is not carried at all,
+    for the reason D11 gives for avoiding unstable identifiers.
+    """
 
     def __str__(self) -> str:
         return f"{self.ref} ({self.value})" if self.value else self.ref

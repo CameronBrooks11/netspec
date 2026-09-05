@@ -443,6 +443,58 @@ Also removed here: ``Spec.nets``, ``Spec.polarities``, ``Spec.forbidden`` and
 pattern that does not survive a real vocabulary, and each one a template an implementer
 would have copied.
 
+## D22 — The parser carries a net's classes and a part's sheet, and persists neither
+
+KiCad states both on every netlist it writes and netspec discarded both. They are inputs
+the contract vocabulary needs: a net's classes are what a power-domain or
+differential-pair rule is written against, and a component's sheet is what lets a rule
+tell two instances of a repeated block apart. Neither had to be inferred.
+
+Both turned out to be less simple than they look, and the shape of this decision is
+mostly the ways they are not.
+
+**A net has classes, plural, and one of them is always ``Default``.** KiCad joins them
+with commas:
+
+    <net code="2" name="GND"  class="Power,Default">
+    <net code="3" name="VIN"  class="Power, Fast,Default">
+
+Modelled first as a single ``netclass: str``, which is wrong in the way that matters:
+the field exists so a rule can ask "is this net in the Power domain", and against
+``"Power,Default"`` an equality test says no. It is now ``netclasses: tuple[str, ...]``,
+a shape that makes membership the obvious operation and equality the awkward one.
+
+**The joining is not escaped, and that loss is KiCad's, not recoverable here.** The
+second line above comes from a project that really does declare a class named ``Power,
+Fast``; it is indistinguishable from three classes. netspec splits without stripping, so
+the stray leading space in ``" Fast"`` survives as the only evidence something was lost.
+``tests/fixtures/netclasses`` is a real KiCad project carrying exactly this case.
+
+**A component's sheet is one value even when its units are on several.** KiCad writes a
+single ``<sheetpath>`` per component and chooses it by sheet traversal order, so a dual
+op-amp straddling two channels is attributed wholly to one of them — and reordering the
+pages, an edit with no electrical meaning, can change which. It is honest as "a sheet
+this part appears on" and false as "the sheet this part is on".
+
+**So neither is persisted, and the snapshot schema did not change.** A snapshot holds
+what the diff compares, and the diff compares membership. Persisting a fact the diff
+ignores would give a repo that commits snapshots a red ``git diff`` beside a green
+``netspec diff`` with nothing naming the cause — precisely the spurious diff
+``snapshot.py`` opens by promising cannot happen. Sheet fails a second test besides: it
+is not stable enough to commit at all. Keeping both out of the file also means no schema
+bump, so no older netspec is locked out of a snapshot it could have read.
+
+The fields are still available where they are needed. ``check`` reads a design through
+the oracle on every run, so a rule sees them fresh; only the persisted artifact omits
+them.
+
+**Two neighbours are left behind entirely.** ``<net code>`` is KiCad's net *number* and
+ordinary edits renumber it; ``<sheetpath tstamps>`` is the same path in UUIDs. D11 keeps
+unstable identifiers out of this model, and a contract is a durable statement about a
+design. The tests asserting this check *parsed values* — that no field holds a UUID or a
+net code — rather than attribute names: an earlier version checked ``hasattr(Net,
+"code")`` and passed happily while a scratch build carried both under other spellings.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical

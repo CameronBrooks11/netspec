@@ -39,10 +39,23 @@ def test_live_netlist_matches_recorded_ground_truth(oracle: Cli10Backend) -> Non
         ("swapped_pins", 1),
         ("reversed_polarized_cap", 1),
         ("hierarchy", 1),
+        ("netclasses", 3),
     ):
         live = oracle.netlist(FIXTURES / f"{name}.kicad_sch")
         recorded = parse_kicadxml_file(FIXTURES / f"{name}.expected.xml")
-        assert live.nets == recorded.nets, f"{name}: live KiCad disagrees with the fixture"
+
+        # Split, because `live.nets == recorded.nets` compares whole frozen Net objects
+        # -- including netclasses. A class-only mismatch failing under a message about
+        # connectivity sends the reader to the wrong place.
+        assert {n.name: n.nodes for n in live.nets.values()} == {
+            n.name: n.nodes for n in recorded.nets.values()
+        }, f"{name}: live KiCad disagrees with the fixture about what is connected"
+        assert {n.name: n.netclasses for n in live.nets.values()} == {
+            n.name: n.netclasses for n in recorded.nets.values()
+        }, f"{name}: live KiCad disagrees with the fixture about net classes"
+        assert live.components == recorded.components, (
+            f"{name}: live KiCad disagrees with the fixture about components or sheets"
+        )
         assert len(live.connected_nets) == connected
 
 
