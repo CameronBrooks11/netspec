@@ -70,16 +70,48 @@ def test_kicad_is_only_invoked_from_the_oracle() -> None:
     )
 
 
-def _imports_subprocess(source: str) -> bool:
-    """By AST, not by grep. The word appears in prose that explains why a module is safe."""
+# Names that start a process by any route. The plain-string check this replaced caught
+# `__import__("subprocess")` for free and an AST-only version did not, so it is a union:
+# real imports by AST, plus these as text. Weaker than what came before is not a fix.
+_SPAWN_TEXT = (
+    "subprocess",
+    "os.system",
+    "os.popen",
+    "os.exec",
+    "os.spawn",
+    "os.posix_spawn",
+    "multiprocessing",
+    "pty.spawn",
+)
+
+
+def _spawns(source: str) -> bool:
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             if any(a.name.split(".")[0] == "subprocess" for a in node.names):
                 return True
-        elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("subprocess"):
+        elif isinstance(node, ast.ImportFrom) and (node.module or "") == "subprocess":
             return True
-    return False
+
+    # Docstrings and comments explain why a module is safe, and mention the word doing
+    # it, so prose is stripped before the text sweep rather than exempting whole files.
+    stripped = ast.unparse(_without_docstrings(tree))
+    return any(name in stripped for name in _SPAWN_TEXT)
+
+
+def _without_docstrings(tree: ast.AST) -> ast.AST:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            body = getattr(node, "body", [])
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                node.body = body[1:] or [ast.Pass()]
+    return tree
 
 
 def test_only_the_oracle_and_the_command_runner_spawn_processes() -> None:
@@ -89,7 +121,7 @@ def test_only_the_oracle_and_the_command_runner_spawn_processes() -> None:
         rel = p.relative_to(SRC)
         if _in_oracle(p) or rel.as_posix() in SPAWN_EXEMPT:
             continue
-        if _imports_subprocess(p.read_text(encoding="utf-8")):
+        if _spawns(p.read_text(encoding="utf-8")):
             offenders.append(rel)
     assert not offenders, f"unexpected process spawning outside the oracle: {offenders}"
 
@@ -190,9 +222,14 @@ def test_every_rule_type_can_appear_in_the_report() -> None:
 
 
 def test_every_rule_describes_a_subject_and_stays_json_safe() -> None:
-    from kicad_netspec.contract import Forbid, Net, Polarity, Rule
+    from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Unknown
 
-    samples = [Net("VIN", ("R1.1",)), Polarity("C1", "VIN", "GND"), Forbid(("VIN", "GND"))]
+    samples = [
+        Net("VIN", ("R1.1",)),
+        Polarity("C1", "VIN", "GND"),
+        Forbid(("VIN", "GND")),
+        Unknown(declared="something_from_a_future_netspec"),
+    ]
     assert {type(s) for s in samples} == set(Rule.__subclasses__()), (
         "a rule type exists that this test does not sample"
     )

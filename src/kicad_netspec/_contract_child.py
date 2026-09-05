@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import sys
 from typing import Any
 
@@ -48,7 +49,13 @@ def main(argv: list[str]) -> int:
 
     with open(result_file, "w", encoding="utf-8") as handle:
         json.dump(_spec_to_json(spec), handle)
-    return 0
+        handle.flush()
+        os.fsync(handle.fileno())
+
+    # os._exit, not return: a contract can register an atexit handler or leave a
+    # non-daemon thread, both of which run after main() and were able to rewrite the
+    # result the parent is about to read. Nothing of the contract's runs past here.
+    os._exit(0)
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised as a subprocess

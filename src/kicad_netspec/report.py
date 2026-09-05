@@ -24,8 +24,9 @@ from typing import Any
 
 from kicad_netspec import __version__
 from kicad_netspec.check import CheckReport, CheckResult
+from kicad_netspec.model import Netlist
 
-__all__ = ["REPORT_SCHEMA", "check_report"]
+__all__ = ["REPORT_SCHEMA", "check_report", "design_digest"]
 
 REPORT_SCHEMA = 1
 """Bumped when the document's shape changes in a way a reader could trip over."""
@@ -33,7 +34,32 @@ REPORT_SCHEMA = 1
 _STATUSES = ("pass", "fail", "unsupported", "skipped")
 
 
-def check_report(report: CheckReport, *, contract: str = "", name: str = "") -> dict[str, Any]:
+def design_digest(netlist: Netlist) -> str:
+    """A stable fingerprint of the design netspec actually read.
+
+    Taken over the *snapshot*, not the schematic file, for two reasons. The snapshot is
+    canonical by construction -- sorted keys, fixed set order, no coordinates, no
+    timestamps -- so it is identical run to run for an unchanged design, where the raw
+    XML carries a path and a date and is not. And it covers every sheet of a hierarchical
+    design, where hashing the root file would miss the sub-sheets.
+
+    It exists because isolation (D24) cannot stop a contract swapping the schematic on
+    disk before the parent reads it. Recording this makes such a swap **detectable** --
+    recompute it from the committed files and compare -- which is not the same as
+    preventing it, and D24 says so.
+    """
+    from kicad_netspec.snapshot import dumps
+
+    return "sha256:" + hashlib.sha256(dumps(netlist).encode("utf-8")).hexdigest()
+
+
+def check_report(
+    report: CheckReport,
+    *,
+    contract: str = "",
+    name: str = "",
+    netlist: Netlist | None = None,
+) -> dict[str, Any]:
     """Render an adjudicated contract as a JSON-safe document.
 
     ``contract`` and ``name`` identify where the assertions came from. Without them two
@@ -48,6 +74,7 @@ def check_report(report: CheckReport, *, contract: str = "", name: str = "") -> 
         "contract": contract,
         "name": name,
         "source": report.source,
+        "design_digest": design_digest(netlist) if netlist is not None else "",
         "kicad_version": report.kicad_version,
         "verdict": report.verdict,
         "verdict_reason": _why(report.verdict, counts),

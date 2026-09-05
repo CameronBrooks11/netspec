@@ -48,7 +48,9 @@ def test_a_contract_cannot_replace_the_oracle_in_the_parent(tmp_path: Path) -> N
     assert spec.source == "b.kicad_sch", "the contract's declarations still arrive"
 
 
-def test_a_contract_cannot_reach_the_parent_at_all(tmp_path: Path) -> None:
+def test_a_contract_cannot_mutate_the_parents_module_state(tmp_path: Path) -> None:
+    """Named for what holds. A contract can still kill the parent, or exhaust it -- both
+    denials of service, neither a false pass. It cannot change what the parent believes."""
     import kicad_netspec.report as report_module
 
     before = report_module.REPORT_SCHEMA
@@ -130,7 +132,8 @@ def test_a_contract_that_exits_is_reported_rather_than_believed(tmp_path: Path) 
         load_isolated(str(contract))
 
 
-def test_a_contract_that_prints_does_not_corrupt_the_result(tmp_path: Path) -> None:
+def test_output_on_any_descriptor_does_not_corrupt_the_result(tmp_path: Path) -> None:
+    """The result travels through a file, so stdout is not a channel to fight over."""
     contract = _write(
         tmp_path,
         "import os, sys\n"
@@ -141,6 +144,64 @@ def test_a_contract_that_prints_does_not_corrupt_the_result(tmp_path: Path) -> N
         "board = Spec(source='b.kicad_sch', rules=[net('VIN', ['R1.1'])])\n",
     )
     assert load_isolated(str(contract)).source == "b.kicad_sch"
+
+
+def test_a_contract_cannot_rewrite_the_result_after_it_is_written(tmp_path: Path) -> None:
+    """atexit handlers and non-daemon threads run after the load returns. The child exits
+    hard so that neither gets to replace what the parent is about to read."""
+    contract = _write(
+        tmp_path,
+        "import atexit, json, sys, threading\n"
+        "_forged = json.dumps({'source': 'FORGED.kicad_sch', 'rules': []})\n"
+        "def _overwrite():\n"
+        "    open(sys.argv[-1], 'w').write(_forged)\n"
+        "atexit.register(_overwrite)\n"
+        "threading.Thread(target=_overwrite).start()\n"
+        "from kicad_netspec import Spec, net\n"
+        "board = Spec(source='b.kicad_sch', rules=[net('VIN', ['R1.1'])])\n",
+    )
+    assert load_isolated(str(contract)).source == "b.kicad_sch"
+
+
+def test_an_unknown_rule_kind_is_a_finding_not_an_environment_fault(tmp_path: Path) -> None:
+    """A contract may define its own Rule subclass the parent never imported. That is a
+    statement about the contract, so it must not surface as "netspec could not look"."""
+    from kicad_netspec.contract import Unknown
+
+    contract = _write(
+        tmp_path,
+        "from dataclasses import dataclass\n"
+        "from typing import ClassVar\n"
+        "from kicad_netspec import Spec\n"
+        "from kicad_netspec.contract import Rule\n"
+        "@dataclass(frozen=True)\n"
+        "class Future(Rule):\n"
+        "    kind: ClassVar[str] = 'fanout'\n"
+        "    name: str\n"
+        "    def net_names(self): return ()\n"
+        "    def describe(self): return {'subject': self.name}\n"
+        "    def __str__(self): return 'future'\n"
+        "board = Spec(source='b.kicad_sch', rules=[Future('VIN')])\n",
+    )
+    (rule,) = load_isolated(str(contract)).rules
+    assert isinstance(rule, Unknown)
+    assert rule.declared == "fanout"
+
+
+def test_a_forbid_with_too_few_nets_cannot_be_rebuilt(tmp_path: Path) -> None:
+    """The JSON path is a second constructor; Forbid(nets=()) adjudicated as pass."""
+    from kicad_netspec.isolate import _restore_rule
+
+    with pytest.raises(ContractError):
+        _restore_rule({"kind": "forbid", "fields": {"nets": []}})
+
+
+def test_the_rebuild_refuses_fields_of_the_wrong_type() -> None:
+    from kicad_netspec.isolate import _rebuild
+
+    for bad in ({"source": 5}, {"source": "b", "variant": [1]}, {"source": "b", "rules": "no"}):
+        with pytest.raises(ContractError):
+            _rebuild(bad)
 
 
 def test_a_contract_that_never_finishes_is_stopped(tmp_path: Path) -> None:

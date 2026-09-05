@@ -20,9 +20,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from kicad_netspec import contract as contract_mod
 from kicad_netspec.check import CheckReport, check_spec
 from kicad_netspec.diff import NetlistDiff, diff_netlists
+from kicad_netspec.isolate import load_isolated
 from kicad_netspec.model import Netlist
 from kicad_netspec.ops.run import run_command
 from kicad_netspec.oracle import Cli10Backend, EnvironmentError_
@@ -79,7 +79,10 @@ def _one(
 
     check: CheckReport | None = None
     if contract_path:
-        spec = contract_mod.load(contract_path)
+        # Isolated, like `check` and `guard` (D24). This is the highest-stakes consumer
+        # -- it posts a verdict as a pull-request comment and gates merges -- and it was
+        # left on the in-process path when the others were converted.
+        spec = load_isolated(contract_path)
         check = check_spec(spec, head)
 
     base = _base_version(backend, path, base_ref) if base_ref else None

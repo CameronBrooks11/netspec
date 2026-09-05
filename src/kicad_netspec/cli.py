@@ -260,7 +260,9 @@ def _check(args: argparse.Namespace) -> int:
     report = check_spec(spec, netlist)
 
     if getattr(args, "format", "text") == "json":
-        document = check_report(report, contract=str(args.contract), name=spec.name)
+        document = check_report(
+            report, contract=str(args.contract), name=spec.name, netlist=netlist
+        )
         print(json.dumps(document, indent=2, sort_keys=False))
     else:
         print(f"{source}")
