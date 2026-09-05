@@ -304,6 +304,16 @@ def _check_mirrors(rule: Mirrors, netlist: Netlist, resolved: Resolved) -> Check
                     f"{backward[y]} on another pin"
                 ),
             )
+    if not forward:
+        # Two pinless parts, or two entirely unwired ones, paired nothing. Returning
+        # green there is what check.py's own docstring calls "how a contract stops
+        # protecting anything" -- an earlier fix to the presence check turned a
+        # wrongly-worded failure into a genuinely vacuous pass.
+        return CheckResult(
+            rule=label,
+            status="skipped",
+            detail=f"{a} and {b} have no wired pins between them; nothing was compared",
+        )
     return CheckResult(rule=label, status="pass", detail=f"{len(forward)} nets paired")
 
 

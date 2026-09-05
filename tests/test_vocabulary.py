@@ -233,3 +233,38 @@ def test_a_net_a_designer_named_is_not_treated_as_floating() -> None:
 
     nl = parse_kicadxml_file(_P(__file__).parent / "fixtures" / "hierarchy.expected.xml")
     assert check_spec(Spec(source="h", rules=[mirrors("R1", "R2")]), nl).verdict == "pass"
+
+
+def test_mirroring_nothing_is_not_a_pass() -> None:
+    """Two pinless parts, or two unwired ones, pair no nets. Green there is exactly what
+    check.py's docstring calls "how a contract stops protecting anything"."""
+    netlist = build_netlist(
+        [Net("A", frozenset({Node("U1", "1")}))],
+        [Component("U1"), Component("MH1"), Component("MH2")],
+    )
+    report = check_spec(Spec(source="b", rules=[mirrors("MH1", "MH2")]), netlist)
+
+    assert report.results[0].status == "skipped"
+    assert "nothing was compared" in report.results[0].detail
+    assert report.verdict == "fail", "skipped is not green"
+
+
+def test_a_permutation_passes_when_the_parts_share_no_net() -> None:
+    """The limit, pinned so it cannot quietly be believed closed.
+
+    The shared-net clause is the only anchor available, so two instances with per-channel
+    supplies -- an isolated gate driver, a bootstrap leg -- have nothing to line up
+    against and a swapped pair mirrors. Nothing in a netlist can fix that: the
+    correspondence lives in a naming convention.
+    """
+    netlist = build_netlist(
+        [
+            Net("VDDA", frozenset({Node("U2", "1")})),
+            Net("VSSA", frozenset({Node("U2", "2")})),
+            Net("VDDB", frozenset({Node("U3", "2")})),  # swapped relative to U2
+            Net("VSSB", frozenset({Node("U3", "1")})),
+            Net("SIG", frozenset({Node("U2", "3"), Node("U3", "3")})),
+        ],
+        [Component("U2"), Component("U3")],
+    )
+    assert check_spec(Spec(source="b", rules=[mirrors("U2", "U3")]), netlist).verdict == "pass"

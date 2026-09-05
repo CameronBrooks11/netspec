@@ -290,22 +290,32 @@ class Mirrors(Rule):
     It compares two *parts*. A block is several rules, one per corresponding pair; it
     cannot see a change that leaves both instances equally wrong.
 
-    **It says less the fewer pins a part has**, and the effect reaches further than
-    "two-pin". Randomly rewiring one part and asking whether it still mirrors:
+    **The shared-net clause is the only anchor there is, so where two instances share no
+    net this rule is pure isomorphism and a permuted channel passes.** Every permutation
+    of one part's pin-to-net map, at every pin count:
 
-    ======  ================  ================
-    pins    no shared rails   two shared rails
-    ======  ================  ================
-    2       ~51%              ~74%
-    3       ~22%              ~48%
-    4       ~10%              ~28%
-    6       ~1%               ~7%
-    11      ~0%               ~0.2%
-    ======  ================  ================
+    ======  ==========================  ==========================
+    pins    no net shared               two nets shared
+    ======  ==========================  ==========================
+    3       6/6 permutations pass       1/6 pass
+    4       24/24 pass                  2/24 pass
+    8       40320/40320 pass            720/40320 pass
+    ======  ==========================  ==========================
 
-    Measured over random rewirings; take it as the shape of the curve rather than exact
-    figures. The rule earns its keep on multi-pin parts, and the pass detail reports how
-    many nets were paired so a reader can see how much was actually checked.
+    Per-channel supplies are not exotic -- an isolated gate driver, a bootstrap
+    half-bridge leg, a per-phase floating rail -- and two such instances share nothing, so
+    a VCC/GND swap between them mirrors happily. Nothing in a netlist can anchor them:
+    the correspondence lives in a naming convention, and reading one would be the string
+    surgery this rule exists to avoid. **Use it where instances share a rail**, which is
+    the common case and the one the real board it was built against has.
+
+    It also **pairs pins by number**, not by function -- the one rule in this vocabulary
+    that does, against the advice at the top of this module. Two instances of the same
+    die in differently numbered symbols mirror while their functions disagree.
+
+    A cost worth knowing: two instances that touch each other cannot mirror, because the
+    net linking them is shared and so must map to itself. Cascaded gain stages and
+    resistor ladders are excluded by design.
     """
 
     parts: tuple[str, str]

@@ -721,11 +721,26 @@ distinct net, and a part with every pin unwired mirrored a fully wired one. A on
 the *designer* named is a different thing — a deliberate label on a sheet pin — so
 anonymity is part of the test.
 
-**``mirrors`` says less the fewer pins a part has**, and further than "two-pin" admits.
-Randomly rewiring one part and asking whether it still mirrors gives roughly 51% at two
-pins, 22% at three, 10% at four, 1% at six and ~0% at eleven — and roughly doubling with
-two shared rails, the common-ground case the rule advertises handling. The real board's
-eleven-pin drivers are the strong end of that curve, not the typical one.
+**The shared-net clause is the only anchor, and where two instances share no net the rule
+is pure isomorphism.** Every permutation passes then — 6/6 at three pins, 24/24 at four,
+40320/40320 at eight — against 1/6, 2/24 and 720/40320 when two nets are shared. Per-channel
+supplies are not exotic (an isolated gate driver, a bootstrap half-bridge leg, a per-phase
+floating rail), so a VCC/GND swap between two such instances mirrors happily.
+
+Nothing in a netlist can close that: the correspondence between ``/VDDA`` and ``/VDDB``
+lives in a naming convention, and reading one would be the string surgery this rule was
+designed to avoid. So it is a stated bound, not a defect to fix — use ``mirrors`` where
+instances share a rail, which is the common case and the one the real board has.
+
+An earlier version of this entry gave a table of "random rewiring" pass rates instead.
+That measured the wrong axis: random rewiring mostly produces net *collisions*, which the
+plain bijection already rejects, so the numbers flattered the fix and said nothing about
+permutations — the actual defect class. Replaced with the permutation figures above.
+
+Two smaller bounds: ``mirrors`` pairs pins **by number**, not by function, making it the
+one rule here that leans on the identifier D12 calls untrustworthy; and two instances that
+touch each other cannot mirror, since the net linking them is shared and must map to
+itself, which excludes cascaded stages and resistor ladders by design.
 
 **What ``mirrors`` cannot see**: it compares two parts, so a block is several rules, and a
 change leaving both instances equally wrong is invisible. Comparing two sheet instances
