@@ -22,7 +22,7 @@ from typing import Literal
 from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Spec
 from kicad_netspec.model import Netlist
 
-__all__ = ["CheckReport", "CheckResult", "check_spec"]
+__all__ = ["CheckReport", "CheckResult", "check_spec", "net_of_pin"]
 
 Status = Literal["pass", "fail", "unsupported", "skipped"]
 Verdict = Literal["pass", "fail"]
@@ -57,8 +57,12 @@ class CheckReport:
 
     @property
     def verdict(self) -> Verdict:
-        """Green only when every rule passed. Anything else fails."""
-        return "pass" if all(r.green for r in self.results) else "fail"
+        """Green only when there was something to check and every rule passed.
+
+        A report with no results is not green: ``all([])`` is ``True``, so an empty
+        contract would otherwise exit 0 while protecting nothing.
+        """
+        return "pass" if self.results and all(r.green for r in self.results) else "fail"
 
     def of_status(self, status: Status) -> tuple[CheckResult, ...]:
         return tuple(r for r in self.results if r.status == status)
@@ -79,11 +83,30 @@ def check_spec(spec: Spec, netlist: Netlist) -> CheckReport:
     results = [_check_rule(rule, netlist) for rule in spec.rules]
     if spec.require_no_floating_pins:
         results.append(_check_no_floating(netlist))
+    if not results:
+        results.append(
+            CheckResult(
+                rule="this contract asserts something",
+                status="fail",
+                detail="the contract has no rules, so it checked nothing and protects nothing",
+            )
+        )
     return CheckReport(
         results=tuple(results),
         source=netlist.source,
         kicad_version=netlist.kicad_version,
     )
+
+
+def net_of_pin(netlist: Netlist, ref: str, pin: str) -> str | None:
+    """Net a pin sits on, given either its number or KiCad's pin function name.
+
+    ``Netlist.net_of`` is indexed by pin *number* only. Device:D calls its pins ``A``
+    and ``K``, so a contract written the way D12 says to write one -- preferring the
+    function name -- resolved to nothing and reported a correct board as broken.
+    """
+    node = netlist.resolve(f"{ref}.{pin}")
+    return netlist.net_of(node.ref, node.pin) if node else None
 
 
 def _check_rule(rule: Rule, netlist: Netlist) -> CheckResult:
@@ -140,8 +163,8 @@ def _check_polarity(rule: Polarity, netlist: Netlist) -> CheckResult:
     if rule.ref not in netlist.components:
         return CheckResult(rule=label, status="skipped", detail=f"{rule.ref} is not in this design")
 
-    actual_plus = netlist.net_of(rule.ref, rule.plus_pin)
-    actual_minus = netlist.net_of(rule.ref, rule.minus_pin)
+    actual_plus = net_of_pin(netlist, rule.ref, rule.plus_pin)
+    actual_minus = net_of_pin(netlist, rule.ref, rule.minus_pin)
 
     wrong = []
     if actual_plus != rule.plus:
@@ -166,15 +189,35 @@ def _check_forbid(rule: Forbid, netlist: Netlist) -> CheckResult:
     label = str(rule)
 
     present = [n for n in rule.nets if n in netlist.nets]
-    if len(present) < 2:
+    absent = [n for n in rule.nets if n not in netlist.nets]
+
+    # This is what a short actually looks like. KiCad does not emit a pin sitting on two
+    # named nets -- it MERGES the nets and keeps one name, so the other simply
+    # disappears. A net a contract declared distinct that has vanished is therefore the
+    # signature of a short, which LVS calls an n:1 merge. Verified against kicad-cli:
+    # relabelling VIN to GND in a three-net design yields two nets, and no VIN.
+    if absent:
+        if not present:
+            return CheckResult(
+                rule=label,
+                status="fail",
+                detail=(
+                    f"none of these nets exist in this design: {', '.join(absent)} -- "
+                    "the rule names nothing real, so nothing was checked"
+                ),
+            )
         return CheckResult(
             rule=label,
-            status="skipped",
-            detail=f"only {len(present)} of these nets exist, so they cannot be shorted",
+            status="fail",
+            detail=(
+                f"gone: {', '.join(absent)}; still here: {', '.join(present)}. "
+                "A short merges two nets and keeps one of the names, so a net this "
+                "contract declared separate that has vanished is what a short looks like."
+            ),
         )
 
-    # Two named nets cannot literally be one net in KiCad, so the check is for pins that
-    # appear on more than one of them -- which is what a short looks like in a netlist.
+    # Belt and braces for an oracle that does emit a pin on two nets. KiCad cannot, but
+    # nothing in the model forbids it and the cost of looking is nil.
     seen: dict[str, str] = {}
     shared: list[str] = []
     for name in present:
