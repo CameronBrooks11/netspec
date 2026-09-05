@@ -26,6 +26,7 @@ from kicad_netspec.isolate import load_isolated
 from kicad_netspec.model import Netlist
 from kicad_netspec.ops.run import run_command
 from kicad_netspec.oracle import Cli10Backend, EnvironmentError_
+from kicad_netspec.report import design_digest
 
 __all__ = ["main", "render"]
 
@@ -91,7 +92,8 @@ def _one(
     # Recorded here too: D24 leans on the digest to make an on-disk schematic swap
     # detectable, and the scenario it describes is a CI one. Emitting it only from
     # `check --format json` left the merge-gating consumer without it.
-    body = [f"### `{path}`", "", f"<sub>design `{design_digest(head)}`</sub>", ""]
+    digest = design_digest(head)
+    body = [f"### `{path}`", "", f"<sub>design `{digest}`</sub>", ""]
     if result is None:
         body.append(
             f"_No base revision to compare against_ — {len(head.components)} components, "
