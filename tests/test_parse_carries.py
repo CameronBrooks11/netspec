@@ -1,149 +1,151 @@
 """Facts KiCad puts in the netlist that netspec used to throw away.
 
-Both are prerequisites for the contract vocabulary: a net's *class* is what a
-power-domain or differential-pair rule is written against, and a component's *sheet* is
-what lets a rule compare two instances of a repeated block.
+Both are inputs the contract vocabulary needs: a net's *classes* are what a power-domain
+or differential-pair rule is written against, and a component's *sheet* is what lets a
+rule tell two instances of a repeated block apart.
 
-Neither is invented -- KiCad emits both on every component and every net, and the parser
-simply dropped them on the floor.
+Neither is invented -- KiCad emits both -- but neither is as simple as it looks, and the
+tests below exist mostly to pin down the ways they are not.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-import pytest
-
 from kicad_netspec.parse import parse_kicadxml, parse_kicadxml_file
-from kicad_netspec.snapshot import SNAPSHOT_SCHEMA, dumps, loads
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _hier():
-    return parse_kicadxml_file(FIXTURES / "hierarchy.expected.xml")
+def _fixture(name: str):
+    return parse_kicadxml_file(FIXTURES / f"{name}.expected.xml")
 
 
-# -- net class -------------------------------------------------------------------------
+# -- net classes: a list, not a name ----------------------------------------------------
 
 
-def test_a_nets_class_is_carried() -> None:
-    """<net code="1" name="+3V3" class="Default"> -- the class was discarded."""
-    nl = parse_kicadxml_file(FIXTURES / "good_ldo.expected.xml")
-    assert nl.nets["VIN"].netclass == "Default"
+def test_a_net_belongs_to_every_class_kicad_lists() -> None:
+    """KiCad always appends Default, so a rule must test membership, never equality."""
+    nl = _fixture("netclasses")
+
+    assert nl.nets["GND"].netclasses == ("Power", "Default")
+    assert "Power" in nl.nets["GND"].netclasses
+    assert nl.nets["GND"].netclasses != ("Power",), "equality is the trap this shape prevents"
 
 
-def test_a_net_with_no_class_reports_an_empty_one() -> None:
+def test_a_net_in_no_declared_class_is_still_in_Default() -> None:
+    nl = _fixture("netclasses")
+    assert nl.nets["+3V3"].netclasses == ("Default",)
+
+
+def test_a_class_name_containing_a_comma_cannot_be_recovered() -> None:
+    """KiCad joins classes with ',' and does not escape them. This is lossy at the source.
+
+    The fixture's project really does declare a class named ``Power, Fast``; KiCad writes
+    ``class="Power, Fast,Default"``, which is indistinguishable from three classes. netspec
+    reports the split as-is rather than stripping, so the stray leading space survives as
+    the only clue that something was lost.
+    """
+    nl = _fixture("netclasses")
+    assert nl.nets["VIN"].netclasses == ("Power", " Fast", "Default")
+
+
+def test_a_netlist_with_no_classes_at_all_reports_none() -> None:
     doc = """<export version="E">
       <components><comp ref="R1"><value>1k</value></comp></components>
       <nets><net code="1" name="VIN"><node ref="R1" pin="1"/></net></nets>
     </export>"""
-    assert parse_kicadxml(doc).nets["VIN"].netclass == ""
+    nl = parse_kicadxml(doc)
+    assert nl.nets["VIN"].netclasses == ()
+    assert nl.components["R1"].sheet == "", "no <sheetpath> means no sheet, not a guess"
 
 
-# -- sheet path ------------------------------------------------------------------------
+# -- sheet ------------------------------------------------------------------------------
 
 
 def test_a_flat_design_puts_every_component_on_the_root_sheet() -> None:
-    nl = parse_kicadxml_file(FIXTURES / "good_ldo.expected.xml")
-    assert {c.sheet for c in nl.components.values()} == {"/"}
+    assert {c.sheet for c in _fixture("good_ldo").components.values()} == {"/"}
 
 
-def test_a_hierarchical_design_reports_which_sheet_each_part_is_on() -> None:
-    """The input `mirrors()` needs: which instance of a repeated block a part belongs to."""
-    nl = _hier()
-    assert nl.components["R1"].sheet == "/Channel1/"
-    assert nl.components["R2"].sheet == "/Channel2/"
-    assert nl.components["R3"].sheet == "/Aux/"
+def test_a_hierarchical_design_separates_the_repeated_block() -> None:
+    """The separation a symmetry rule needs: which instance a part belongs to."""
+    nl = _fixture("hierarchy")
 
-
-def test_the_two_channels_are_separable_by_sheet() -> None:
-    nl = _hier()
-    by_sheet: dict[str, list[str]] = {}
+    by_sheet: dict[str, set[str]] = {}
     for c in nl.components.values():
-        by_sheet.setdefault(c.sheet, []).append(c.ref)
-    assert sorted(by_sheet) == ["/Aux/", "/Channel1/", "/Channel2/"]
+        by_sheet.setdefault(c.sheet, set()).add(c.ref)
+
+    assert by_sheet == {"/Channel1/": {"R1"}, "/Channel2/": {"R2"}, "/Aux/": {"R3"}}
 
 
 # -- what is deliberately NOT carried ---------------------------------------------------
+#
+# Asserted against parsed *values*, not attribute names. An earlier version of these
+# checked `hasattr(Net, "code")`, which passed happily while a scratch build carried the
+# net code and the sheet UUID under different names -- a test that guarded a spelling.
 
 
-def test_the_net_code_is_not_carried() -> None:
-    """KiCad's net *number* is renumbered by ordinary edits, so a contract must not see it.
+def test_no_parsed_field_carries_a_uuid() -> None:
+    """<sheetpath> also offers tstamps="/<uuid>/". D11 keeps identifiers like that out."""
+    import re
 
-    netspec is coordinate-free and UUID-free for the same reason (D11): an identifier
-    that moves on its own turns a stable assertion into a flaky one.
+    uuid = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+    nl = _fixture("hierarchy")
+
+    seen = [
+        str(v) for item in (*nl.components.values(), *nl.nets.values()) for v in vars(item).values()
+    ]
+    assert not [s for s in seen if uuid.search(s)], "a UUID reached the model"
+
+
+def test_no_parsed_field_carries_kicads_net_number() -> None:
+    """<net code> is renumbered by ordinary edits, so a contract must never see it."""
+    nl = _fixture("hierarchy")
+    codes = {"1", "2", "3", "4", "6"}  # the codes in that fixture
+
+    for net in nl.nets.values():
+        assert codes.isdisjoint({str(v) for v in vars(net).values()})
+
+
+# -- neither belongs in a snapshot ------------------------------------------------------
+
+
+def test_a_snapshot_holds_what_the_diff_compares_and_nothing_else() -> None:
+    """Persisting a fact the diff ignores puts a committed snapshot at odds with netspec.
+
+    A repo that commits snapshots would get a red ``git diff`` beside a green ``netspec
+    diff``, with nothing naming the cause -- the "spurious diff" snapshot.py's own
+    docstring promises cannot happen. Sheet is worse than merely uncompared: it is not
+    stable (see Component.sheet).
     """
-    from kicad_netspec.model import Net
+    import json
 
-    assert not hasattr(Net("N", frozenset()), "code")
+    from kicad_netspec.snapshot import dumps
 
-
-def test_the_sheet_timestamp_path_is_not_carried() -> None:
-    """<sheetpath> also carries tstamps="/<uuid>/". UUIDs are the thing D11 rejects."""
-    from kicad_netspec.model import Component
-
-    assert not hasattr(Component("R1"), "tstamps")
+    payload = json.loads(dumps(_fixture("hierarchy")))
+    assert all("sheet" not in c for c in payload["components"])
+    assert all("netclass" not in n and "netclasses" not in n for n in payload["nets"])
 
 
-# -- snapshots --------------------------------------------------------------------------
+def test_the_snapshot_schema_did_not_have_to_change() -> None:
+    from kicad_netspec.snapshot import SNAPSHOT_SCHEMA
 
-
-def test_a_snapshot_round_trips_the_new_fields() -> None:
-    original = _hier()
-    restored = loads(dumps(original))
-    assert restored.components["R1"].sheet == "/Channel1/"
-    assert restored.nets["/Channel1/OUT"].netclass == "Default"
-    assert restored.nets == original.nets
-    assert restored.components == original.components
-
-
-def test_the_schema_version_was_raised() -> None:
-    assert SNAPSHOT_SCHEMA >= 2, "adding persisted fields is a schema change"
-
-
-def test_an_older_snapshot_still_loads() -> None:
-    """Schema 1 knew neither field. It must still read, with them simply absent."""
-    old = json.dumps(
-        {
-            "schema": 1,
-            "source": "board.kicad_sch",
-            "kicad_version": "9.0",
-            "components": [{"ref": "R1", "value": "1k", "footprint": None, "lib_id": "Device:R"}],
-            "nets": [
-                {
-                    "name": "VIN",
-                    "nodes": [{"ref": "R1", "pin": "1", "function": None, "type": None}],
-                }
-            ],
-        }
-    )
-    nl = loads(old)
-    assert nl.components["R1"].sheet == ""
-    assert nl.nets["VIN"].netclass == ""
-
-
-def test_a_newer_snapshot_is_still_refused() -> None:
-    from kicad_netspec.snapshot import SnapshotError
-
-    with pytest.raises(SnapshotError):
-        loads(json.dumps({"schema": SNAPSHOT_SCHEMA + 1, "nets": [], "components": []}))
+    assert SNAPSHOT_SCHEMA == 1, "nothing was added to the on-disk shape, so nothing broke"
 
 
 # -- the diff must not notice ------------------------------------------------------------
 
 
-def test_a_class_change_alone_is_not_a_connectivity_change() -> None:
+def test_neither_field_manufactures_a_connectivity_change() -> None:
     """Adding fields to a frozen dataclass changes __eq__. The diff must stay node-based."""
     from kicad_netspec.diff import diff_netlists
     from kicad_netspec.model import Component, Net, Node, build_netlist
 
-    def board(netclass: str):
+    def board(sheet: str, classes: tuple[str, ...]):
         return build_netlist(
-            [Net("VIN", frozenset({Node("R1", "1"), Node("R2", "1")}), netclass=netclass)],
-            [Component("R1", "1k"), Component("R2", "1k")],
+            [Net("VIN", frozenset({Node("R1", "1"), Node("R2", "1")}), netclasses=classes)],
+            [Component("R1", "1k", sheet=sheet), Component("R2", "1k", sheet=sheet)],
         )
 
-    result = diff_netlists(board("Default"), board("Power"))
-    assert result.empty, "a netclass rename is not a change in what is connected to what"
+    result = diff_netlists(board("/A/", ("Default",)), board("/B/", ("Power", "Default")))
+    assert result.empty, "reclassifying or re-sheeting is not a change in what connects"

@@ -19,10 +19,15 @@ from kicad_netspec.model import Component, Net, Netlist, Node, build_netlist
 
 __all__ = ["SNAPSHOT_SCHEMA", "SnapshotError", "dumps", "loads", "read", "write"]
 
-SNAPSHOT_SCHEMA = 2
-"""2 added a net's class and a component's sheet. A schema-1 snapshot still reads;
-both fields are simply absent, which is what an empty value means everywhere else."""
-"""Bumped only when the on-disk shape changes incompatibly."""
+SNAPSHOT_SCHEMA = 1
+"""Bumped only when the on-disk shape changes incompatibly.
+
+Note what is *not* here: a net's class and a component's sheet. A snapshot holds what
+the diff compares, and the diff compares membership. Persisting a fact the diff ignores
+would put a repo's committed snapshot in conflict with netspec's own verdict -- a red
+`git diff` beside a green `netspec diff`, with nothing naming the cause -- which is
+exactly the "spurious diff" this module's docstring promises cannot happen.
+"""
 
 
 class SnapshotError(ValueError):
@@ -70,14 +75,12 @@ def _to_json(netlist: Netlist) -> dict[str, Any]:
                 "value": c.value,
                 "footprint": c.footprint,
                 "lib_id": c.lib_id,
-                "sheet": c.sheet,
             }
             for c in sorted(netlist.components.values(), key=lambda c: c.ref)
         ],
         "nets": [
             {
                 "name": net.name,
-                "netclass": net.netclass,
                 "nodes": [
                     {
                         "ref": n.ref,
@@ -109,7 +112,6 @@ def _from_json(payload: Any) -> Netlist:
     nets = [
         Net(
             name=net["name"],
-            netclass=net.get("netclass", ""),
             nodes=frozenset(
                 Node(
                     ref=n["ref"],
@@ -128,7 +130,6 @@ def _from_json(payload: Any) -> Netlist:
             value=c.get("value", ""),
             footprint=c.get("footprint"),
             lib_id=c.get("lib_id"),
-            sheet=c.get("sheet", ""),
         )
         for c in payload.get("components", ())
     ]

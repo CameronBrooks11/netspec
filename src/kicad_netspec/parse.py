@@ -77,7 +77,16 @@ def _nets(root: ET.Element) -> list[Net]:
             )
             for node in element.findall("node")
         )
-        out.append(Net(name=name, nodes=nodes, netclass=element.get("class", "")))
+        # KiCad joins a net's classes with "," and does not escape them; see
+        # Net.netclasses for what that costs. Split without stripping.
+        raw_classes = element.get("class", "")
+        out.append(
+            Net(
+                name=name,
+                nodes=nodes,
+                netclasses=tuple(raw_classes.split(",")) if raw_classes else (),
+            )
+        )
     return out
 
 

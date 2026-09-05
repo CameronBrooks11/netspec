@@ -1,0 +1,14 @@
+{
+  "meta": {"filename": "netclasses.kicad_pro", "version": 1},
+  "net_settings": {
+    "classes": [
+      {"name": "Default", "clearance": 0.2},
+      {"name": "Power", "clearance": 0.4},
+      {"name": "Power, Fast", "clearance": 0.3}
+    ],
+    "netclass_patterns": [
+      {"netclass": "Power", "pattern": "GND"},
+      {"netclass": "Power, Fast", "pattern": "VIN"}
+    ]
+  }
+}

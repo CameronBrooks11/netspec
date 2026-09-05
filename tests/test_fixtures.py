@@ -144,6 +144,7 @@ def test_reversed_polarized_cap_is_backwards_and_erc_cannot_help() -> None:
         ("swapped_pins", 1),
         ("reversed_polarized_cap", 1),
         ("hierarchy", 1),
+        ("netclasses", 3),
     ],
 )
 def test_fixture_ground_truth_is_stable(fixture: str, connected: int) -> None:
