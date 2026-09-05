@@ -88,7 +88,10 @@ def _one(
     base = _base_version(backend, path, base_ref) if base_ref else None
     result = diff_netlists(base, head) if base is not None else None
 
-    body = [f"### `{path}`", ""]
+    # Recorded here too: D24 leans on the digest to make an on-disk schematic swap
+    # detectable, and the scenario it describes is a CI one. Emitting it only from
+    # `check --format json` left the merge-gating consumer without it.
+    body = [f"### `{path}`", "", f"<sub>design `{design_digest(head)}`</sub>", ""]
     if result is None:
         body.append(
             f"_No base revision to compare against_ — {len(head.components)} components, "

@@ -20,6 +20,7 @@ the fields a machine actually wants.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from kicad_netspec import __version__
@@ -35,22 +36,34 @@ _STATUSES = ("pass", "fail", "unsupported", "skipped")
 
 
 def design_digest(netlist: Netlist) -> str:
-    """A stable fingerprint of the design netspec actually read.
+    """A stable fingerprint of the connectivity netspec actually read.
 
-    Taken over the *snapshot*, not the schematic file, for two reasons. The snapshot is
-    canonical by construction -- sorted keys, fixed set order, no coordinates, no
-    timestamps -- so it is identical run to run for an unchanged design, where the raw
-    XML carries a path and a date and is not. And it covers every sheet of a hierarchical
-    design, where hashing the root file would miss the sub-sheets.
+    Over the **design**, not the file and not the snapshot. A snapshot embeds the
+    absolute ``source`` path and the KiCad version, so hashing one gave the same board
+    two digests when it was read from two checkouts -- which breaks the only workflow
+    this exists for: recompute from the committed files and compare. It covers every
+    sheet of a hierarchical design, because it is taken over KiCad's fully expanded
+    netlist rather than the root file.
 
     It exists because isolation (D24) cannot stop a contract swapping the schematic on
-    disk before the parent reads it. Recording this makes such a swap **detectable** --
-    recompute it from the committed files and compare -- which is not the same as
-    preventing it, and D24 says so.
+    disk before the parent reads it. Recording this makes such a swap **detectable**.
+    Detection, not prevention, and D24 says so.
     """
-    from kicad_netspec.snapshot import dumps
-
-    return "sha256:" + hashlib.sha256(dumps(netlist).encode("utf-8")).hexdigest()
+    canonical = json.dumps(
+        {
+            "components": [
+                [c.ref, c.value, c.footprint, c.lib_id]
+                for c in sorted(netlist.components.values(), key=lambda c: c.ref)
+            ],
+            "nets": [
+                [net.name, sorted(f"{n.ref}.{n.pin}" for n in net.nodes)]
+                for net in sorted(netlist.nets.values(), key=lambda n: n.name)
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def check_report(

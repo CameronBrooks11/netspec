@@ -602,10 +602,19 @@ entry did not and was wrong.**
 
 ### What it closes
 
-Every route by which a contract could speak *as netspec*. The result travels through a
-file rather than stdout, so ``print``, ``os.write(1, …)``, rebinding ``sys.__stdout__``,
-``os.dup2`` and a subprocess inheriting the descriptor are all closed by not using that
-channel — not by guarding it, which is what the previous attempt did and why it failed.
+Every route by which a contract could speak as netspec **through its own descriptors**.
+The result travels through a file rather than stdout, so ``print``, ``os.write(1, …)``,
+rebinding ``sys.__stdout__``, ``os.dup2`` and a subprocess inheriting the descriptor are
+closed by not using that channel — not by guarding it, which is what the previous attempt
+did and why it failed.
+
+An earlier draft of this said "every route", full stop. That is wrong: a contract can open
+``/proc/<ppid>/fd/1`` and write onto the parent's *actual* stdout. What that buys is
+bounded and was measured — it can **prepend** text, so a naive line-reading consumer of
+the text format can be shown a fake ``PASS``; it cannot suppress netspec's own report,
+cannot change the exit code, and against the structured consumer it only corrupts the JSON
+into ``report_unavailable``. A denial of report, not a false verdict. Closing it properly
+means a sandboxed child, which is the same answer as the swap below.
 The child's own output goes to a file too, because a detached grandchild inheriting the
 parent's *pipes* held ``communicate()`` open and could deterministically rewrite the
 result after the child had finished. The child ends with ``os._exit`` so that an
