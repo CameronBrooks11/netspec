@@ -63,6 +63,41 @@ def run_cli(*args: str) -> dict[str, Any]:
     }
 
 
+def _with_report(result: dict[str, Any]) -> dict[str, Any]:
+    """Replace the printed text with the parsed document, when there is a real one.
+
+    Validated rather than merely parsed: the document has to identify itself as netspec's
+    own. That stops a stray ``print`` in a contract from being read as a verdict. It does
+    **not** make the report trustworthy independently of the contract -- see the note on
+    ``check`` below, and D23.
+
+    An environment fault (exit 4) prints a message, not a report, and the raw output is
+    kept -- an agent must still be able to read why netspec could not look (D10). Either
+    way ``report_unavailable`` says so explicitly, because a silently missing key is
+    indistinguishable from a key an agent forgot to read.
+    """
+    text = result.get("output") or ""
+    without_text = {k: v for k, v in result.items() if k != "output"}
+
+    if result.get("exit_code") == 4:
+        # Exit 4 means netspec could not look. Whatever is on stdout is not its verdict,
+        # and returning one anyway contradicted this function's own promise.
+        return {**result, "report_unavailable": "netspec could not run; see error"}
+
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        reason = "netspec printed no report" if not text.strip() else "output was not JSON"
+        return {**result, "report_unavailable": reason}
+
+    if not isinstance(parsed, dict) or parsed.get("command") != "check":
+        return {**result, "report_unavailable": "output was JSON, but not a netspec report"}
+    if not isinstance(parsed.get("schema"), int):
+        return {**result, "report_unavailable": "report carries no schema version"}
+
+    return {**without_text, "report": parsed}
+
+
 _MEANING = {
     0: "clean",
     1: "a finding about the design",
@@ -134,10 +169,22 @@ def build_server() -> FastMCP:
         Executes the contract module. Statuses are pass, fail, unsupported and skipped;
         only pass is green, and a skipped rule was not evaluated rather than satisfied.
 
+        Returns the structured report, not the printed text: every result carries the
+        rule as fields plus a stable id, so two runs can be compared to see whether an
+        assertion was removed or quietly weakened.
+
+        **The report is exactly as trustworthy as the contract.** A contract is executed
+        Python (D8), so it runs before the design is read and can do anything this
+        process can -- including replacing the oracle, after which netspec emits a
+        genuine report about a board the contract invented. Treat a contract as you would
+        any executable you are about to run; do not treat this report as evidence about a
+        design whose contract you have not read.
+
         Args:
             contract: path to a contract module, optionally 'file.py:name'
         """
-        return run_cli("check", contract)
+        result = run_cli("check", contract, "--format", "json")
+        return _with_report(result)
 
     @server.tool()
     def gate(design: str, fail_on: str = "error") -> dict[str, Any]:

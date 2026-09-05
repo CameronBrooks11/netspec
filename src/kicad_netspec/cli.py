@@ -13,6 +13,8 @@ Exit codes are part of the contract (DECISIONS D10) and mean different things::
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -23,6 +25,7 @@ from kicad_netspec.diff import NetlistDiff, diff_netlists
 from kicad_netspec.model import Netlist
 from kicad_netspec.ops.guard import guard as run_guard
 from kicad_netspec.oracle import Cli10Backend, EnvironmentError_, RuleReport, find_kicad_cli
+from kicad_netspec.report import check_report
 
 EXIT_OK = 0
 EXIT_VIOLATION = 1
@@ -92,6 +95,12 @@ def _parser() -> argparse.ArgumentParser:
 
     check = subs.add_parser("check", help="adjudicate a contract against the design")
     check.add_argument("contract", help="path to a contract, optionally 'file.py:name'")
+    check.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="text for a person, json for anything else (D2)",
+    )
     check.set_defaults(handler=_check)
 
     gate = subs.add_parser("gate", help="run ERC and DRC at every severity")
@@ -237,16 +246,31 @@ def _print_check(report: CheckReport) -> None:
 
 
 def _check(args: argparse.Namespace) -> int:
+    # A contract is executed Python (D8), and it used to execute onto the same stdout the
+    # report is written to. That let a contract PRINT ITS OWN passing report and exit 0,
+    # which the MCP server then handed to an agent as netspec's verdict -- with kicad-cli
+    # never run. Anything the module writes goes to stderr, where it is visible and
+    # cannot be mistaken for a finding.
     try:
-        spec = contract.load(args.contract)
+        with contextlib.redirect_stdout(sys.stderr):
+            spec = contract.load(args.contract)
     except (FileNotFoundError, ImportError, ValueError) as exc:
         raise EnvironmentError_(f"could not load contract: {exc}") from exc
+    except SystemExit as exc:
+        raise EnvironmentError_(
+            f"contract called sys.exit({exc.code!r}); it must declare, not decide"
+        ) from exc
 
     source = Path(contract.resolve_source(spec, args.contract))
     netlist = Cli10Backend().netlist(source, variant=spec.variant)
     report = check_spec(spec, netlist)
-    print(f"{source}")
-    _print_check(report)
+
+    if getattr(args, "format", "text") == "json":
+        document = check_report(report, contract=str(args.contract), name=spec.name)
+        print(json.dumps(document, indent=2, sort_keys=False))
+    else:
+        print(f"{source}")
+        _print_check(report)
     return EXIT_OK if report.verdict == "pass" else EXIT_VIOLATION
 
 

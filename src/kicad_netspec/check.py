@@ -16,9 +16,9 @@ There is no fifth status for an indeterminate result, because connectivity is ex
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Literal, cast
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
+from typing import Any, Literal, cast
 
 from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Spec
 from kicad_netspec.model import Netlist
@@ -35,8 +35,15 @@ class CheckResult:
     """One rule, adjudicated."""
 
     rule: str
+    """The rendered sentence. What a person reads; not what a machine should parse."""
+
     status: Status
     detail: str = ""
+
+    data: Mapping[str, Any] = field(default_factory=dict, hash=False)
+    """The rule as fields, from :meth:`Rule.describe`. Empty for a synthetic result that
+    corresponds to no rule -- a contract that asserted nothing, or a rule type with no
+    checker."""
 
     @property
     def green(self) -> bool:
@@ -116,6 +123,7 @@ def check_spec(spec: Spec, netlist: Netlist) -> CheckReport:
                 rule="this contract asserts something",
                 status="fail",
                 detail="the contract has no rules, so it checked nothing and protects nothing",
+                data={"kind": "spec", "subject": "asserts_something"},
             )
         )
     return CheckReport(
@@ -132,9 +140,19 @@ def _adjudicate(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult
     it is reported before the rule runs rather than resolved by guesswork. Absence is
     left to the rule: for ``forbid`` a vanished net is the answer, not an obstacle.
     """
+    # kind LAST: a describe() returning its own kind could otherwise diverge from
+    # the ClassVar Spec dedupes on, producing two rules Spec accepts and one id.
+    described = {**rule.describe(), "kind": rule.kind}
+
     problems = resolved.problems_for(rule)
     if problems:
-        return CheckResult(rule=str(rule), status="fail", detail="; ".join(problems))
+        # Described the same way as any other outcome. Passing the bare describe() here
+        # dropped `kind`, so a rule naming an ambiguous net silently changed id -- read
+        # by a report diff as "assertion deleted, unknown assertion appeared", the exact
+        # false alarm the id exists to prevent.
+        return CheckResult(
+            rule=str(rule), status="fail", detail="; ".join(problems), data=described
+        )
 
     checker = CHECKERS.get(type(rule))
     if checker is None:
@@ -144,8 +162,12 @@ def _adjudicate(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult
             rule=str(rule),
             status="fail",
             detail=f"netspec has no way to check a {type(rule).__name__} rule",
+            data=described,
         )
-    return checker(rule, netlist, resolved)
+    # Attached here rather than in every checker: a checker that forgot would produce a
+    # result the report cannot key, and nothing would say so.
+    outcome = checker(rule, netlist, resolved)
+    return replace(outcome, data=described) if not outcome.data else outcome
 
 
 @checks(Net)
@@ -258,10 +280,17 @@ def _check_forbid(rule: Forbid, netlist: Netlist, resolved: Resolved) -> CheckRe
 
 
 def _check_no_floating(netlist: Netlist) -> CheckResult:
+    """The one Spec-level option that adjudicates, so it reports as a `spec` result."""
     floating = netlist.isolated_nodes
     label = "no pin is left unconnected"
+    described = {"kind": "spec", "subject": "no_floating_pins"}
     if not floating:
-        return CheckResult(rule=label, status="pass")
+        return CheckResult(rule=label, status="pass", data=described)
     shown = ", ".join(str(n) for n in floating[:10])
     more = f" (and {len(floating) - 10} more)" if len(floating) > 10 else ""
-    return CheckResult(rule=label, status="fail", detail=f"{len(floating)} floating: {shown}{more}")
+    return CheckResult(
+        rule=label,
+        status="fail",
+        detail=f"{len(floating)} floating: {shown}{more}",
+        data=described,
+    )

@@ -27,8 +27,10 @@ to catch.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import Any, ClassVar
 
 __all__ = [
     "Forbid",
@@ -56,6 +58,13 @@ class Rule:
     fail if either half is missing.
     """
 
+    kind: ClassVar[str] = ""
+    """Stable slug naming this rule type in the machine-readable report.
+
+    Deliberately not the class name: a report is a persisted artifact (D2) and a rename
+    in here must not silently re-key someone's stored report.
+    """
+
     def net_names(self) -> tuple[str, ...]:
         """Every net this rule names, in the words the contract used.
 
@@ -65,6 +74,19 @@ class Rule:
         Returning ``()`` is correct only for a rule that names no nets at all.
         """
         return ()
+
+    def describe(self) -> dict[str, Any]:
+        """This rule as JSON-safe data, for the report.
+
+        Must include ``subject``: the one thing the rule is about, which together with
+        ``kind`` identifies the assertion across runs. That identity is what lets two
+        reports be aligned so a *removed* assertion is distinguishable from an edited
+        one -- the objection D8 answers. Everything else in the returned mapping is the
+        rule's strength, and is expected to change when someone weakens it.
+
+        No tuples, no frozensets: this is serialised verbatim.
+        """
+        return {}
 
 
 @dataclass(frozen=True)
@@ -80,8 +102,21 @@ class Net(Rule):
     connection, and a stray connection is a short.
     """
 
+    kind: ClassVar[str] = "net"
+
+    def __post_init__(self) -> None:
+        # On the dataclass, not only in net(): Net is exported, so validating in the
+        # helper alone left `Net(name="VIN", pins=())` as a way in.
+        if not self.name:
+            raise ValueError("a net rule needs a net name")
+        if not self.pins:
+            raise ValueError(f"net {self.name!r} lists no pins, so it asserts nothing")
+
     def net_names(self) -> tuple[str, ...]:
         return (self.name,)
+
+    def describe(self) -> dict[str, Any]:
+        return {"subject": self.name, "pins": list(self.pins), "exact": self.exact}
 
     def __str__(self) -> str:
         kind = "exactly" if self.exact else "at least"
@@ -103,8 +138,19 @@ class Polarity(Rule):
     minus_pin: str = "2"
     """KiCad's convention for two-pin polarised symbols. Override for parts that differ."""
 
+    kind: ClassVar[str] = "polarity"
+
     def net_names(self) -> tuple[str, ...]:
         return (self.plus, self.minus)
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "subject": self.ref,
+            "plus": self.plus,
+            "minus": self.minus,
+            "plus_pin": self.plus_pin,
+            "minus_pin": self.minus_pin,
+        }
 
     def __str__(self) -> str:
         return (
@@ -121,11 +167,41 @@ class Forbid(Rule):
 
     nets: tuple[str, ...]
 
+    kind: ClassVar[str] = "forbid"
+
     def net_names(self) -> tuple[str, ...]:
         return self.nets
 
+    def describe(self) -> dict[str, Any]:
+        # Sorted throughout, not just in the subject: forbid(A, B) and forbid(B, A) are
+        # one assertion. Canonicalising the key but leaving the body unsorted made the
+        # two align and then report a change, which cancels the benefit exactly.
+        # JSON-encoded rather than joined on a separator: KiCad accepts "|" (and ":")
+        # inside a net name, so `forbid("A|B", "C")` and `forbid("A", "B|C")` joined to
+        # the same string and keyed to one id -- two different assertions, one key.
+        ordered = sorted(self.nets)
+        return {"subject": json.dumps(ordered), "nets": ordered}
+
     def __str__(self) -> str:
-        return f"{' and '.join(self.nets)} must stay separate"
+        return f"{' and '.join(sorted(self.nets))} must stay separate"
+
+
+def _merge(first: Rule, second: Rule) -> Rule | None:
+    """Combine two rules about one subject, or None when they genuinely conflict.
+
+    Two ``exact=False`` net rules compose by union -- "at least A" and "at least B" is
+    "at least A, B" -- and refusing them would break a real shape: a contract assembled
+    from per-subsystem rule lists, where two independently authored blocks each name
+    their own pins on a shared rail and neither can know the other's. Anything else is a
+    contradiction, and the id can only be a key if one subject means one assertion.
+    """
+    if isinstance(first, Net) and isinstance(second, Net) and not (first.exact or second.exact):
+        return Net(
+            name=first.name,
+            pins=first.pins + tuple(p for p in second.pins if p not in first.pins),
+            exact=False,
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -157,10 +233,34 @@ class Spec:
     def __post_init__(self) -> None:
         if not self.source:
             raise ValueError("a Spec needs a source schematic")
+        seen: dict[tuple[str, str], Rule] = {}
         for rule in self.rules:
             if not isinstance(rule, Rule):
                 raise TypeError(f"not a rule: {rule!r}")
-        object.__setattr__(self, "rules", tuple(self.rules))
+            # The report keys a result by kind:subject so two runs can be aligned and a
+            # deleted assertion told from a weakened one (D23). Two rules sharing that
+            # key destroy the property -- and worse, they are how an agent could smuggle
+            # a weak assertion in beside a strong one, since the obvious id-keyed
+            # comparator keeps only the last. Refuse rather than let the guarantee rot.
+            if rule.kind == "spec":
+                raise ValueError(
+                    f"{type(rule).__name__} claims kind 'spec', which netspec reserves "
+                    "for its own Spec-level findings"
+                )
+            # Normalised exactly as the report normalises it, so "" and "unknown" cannot
+            # be two keys here and one there.
+            key = (rule.kind or "unknown", str(rule.describe().get("subject", "")))
+            if key in seen:
+                merged = _merge(seen[key], rule)
+                if merged is None:
+                    raise ValueError(
+                        f"two {key[0]} rules about {key[1]!r}: {seen[key]} / {rule}. "
+                        "A contract states one thing per subject."
+                    )
+                seen[key] = merged
+                continue
+            seen[key] = rule
+        object.__setattr__(self, "rules", tuple(seen.values()))
 
     def __str__(self) -> str:
         return f"Spec({self.name or self.source}, {len(self.rules)} rules)"
@@ -174,6 +274,8 @@ def net(name: str, pins: Iterable[str], *, exact: bool = True) -> Net:
 
     ``exact=False`` asserts only that the listed pins are present, allowing others.
     """
+    # "carries at least nothing" is true of every net and "carries exactly nothing" of
+    # none, so a rule with no pins cannot discriminate; Net.__post_init__ refuses both.
     return Net(name=name, pins=tuple(pins), exact=exact)
 
 
