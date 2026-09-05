@@ -86,18 +86,21 @@ def test_forbid_passes_when_the_rails_are_separate() -> None:
     assert _status(spec, _rail()) == ["pass"]
 
 
-def test_forbid_catches_a_pin_on_both_rails() -> None:
-    shorted = build_netlist(
-        [
-            Net("VIN", frozenset({Node("R1", "1"), Node("C1", "1")})),
-            Net("GND", frozenset({Node("R1", "1"), Node("C1", "2")})),
-        ],
-        [Component("C1"), Component("R1")],
-    )
-    spec = Spec(source="x", rules=[forbid("VIN", "GND")])
-    report = check_spec(spec, shorted)
-    assert report.verdict == "fail"
-    assert "R1.1 is on both" in report.failures[0].detail
+def test_the_netlist_forbid_used_to_hunt_for_cannot_be_built() -> None:
+    """This test used to construct a pin on two nets and assert forbid caught it.
+
+    KiCad cannot produce that shape -- a short merges the nets -- so the branch it
+    exercised never ran on a real design. The model now rejects it outright, and the
+    real short is covered by test_forbid_catches_a_real_short_where_one_net_was_swallowed.
+    """
+    with pytest.raises(ValueError):
+        build_netlist(
+            [
+                Net("VIN", frozenset({Node("R1", "1"), Node("C1", "1")})),
+                Net("GND", frozenset({Node("R1", "1"), Node("C1", "2")})),
+            ],
+            [Component("C1"), Component("R1")],
+        )
 
 
 # -- forbid: what a short actually looks like ------------------------------------------

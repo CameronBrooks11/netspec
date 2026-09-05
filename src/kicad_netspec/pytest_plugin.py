@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from kicad_netspec.check import check_spec, net_of_pin
+from kicad_netspec.check import check_spec
 from kicad_netspec.contract import Spec
 from kicad_netspec.model import Netlist
 from kicad_netspec.oracle import Cli10Backend, EnvironmentError_, KiCadNotFound
@@ -110,8 +110,8 @@ def assert_polarity(
     if ref not in netlist.components:
         raise AssertionError(f"{ref} is not in this design")
 
-    got_plus = net_of_pin(netlist, ref, plus_pin)
-    got_minus = net_of_pin(netlist, ref, minus_pin)
+    got_plus = netlist.net_of(ref, plus_pin)
+    got_minus = netlist.net_of(ref, minus_pin)
     if got_plus == plus and got_minus == minus:
         return
 
