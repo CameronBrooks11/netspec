@@ -679,51 +679,62 @@ strictly *weaker* than the string check it replaced: an AST-only scan missed
 ``__import__("subprocess")``, which grep caught for free. It is now the union of both,
 with docstrings stripped so prose explaining why a module is safe does not trip it.
 
-## D25 — `through` and `mirrors`, the two primitives the real board asked for
+## D25 — `through` and `mirrors`, and the two ways the first version was unsound
 
-Both came out of running this project's own analysis over a real dual-channel motor
-controller, and neither exists in any of the 94 tools surveyed behind this project.
+Both came out of running this project's analysis over a real dual-channel motor
+controller, and neither exists in any of the 94 tools surveyed behind this project. Both
+were also wrong on their first pass in ways that made a green report actively misleading,
+so the record below is the corrected version.
 
 **``through(a, ref, b)`` — a series part is the path, and by default the only path.** A
 fuse, a ferrite, a sense resistor, a net tie separating logic ground from power ground.
-Bypass one or parallel it and the netlist reads as perfectly ordinary: both nets exist,
-everything is connected, ERC is silent. ``only=True`` by default is what makes a star
-ground assertable — a second component across the same two nets is a ground loop, and it
-is legal wiring. Verified against the real board, where ``through("GND", "NT1",
-"GNDPWR")`` names its net tie and ``through("+12V", "U1", "+5V")`` finds the buck as the
-sole bridge between rails.
+Bypass one or parallel it and the netlist reads as ordinary: both nets exist, everything
+is connected, ERC is silent.
 
-**``mirrors(a, b)`` — two parts are wired to the same shape.** The design note behind this
-proposed a channel index and string surgery on net names (``LMD18500[12]`` → ``<CH>``).
-That is not needed and is not done. Two parts mirror when the pin-wise mapping between
-their nets is a **bijection**: each pin agrees about which net of the other part it
-corresponds to, and a net shared by both maps to itself. No index, no regex, no knowledge
-of how the board names its channels. It pairs all eleven pins of the real board's two
-drivers.
+Two limits are stated in the docstring rather than left to be inferred:
 
-**Both were prototyped against the real board before being written**, which is why they
-have the shapes they do, and both were then verified to *fail* on injected defects rather
-than only to pass on a good design:
+* **It asserts pin membership, not conduction.** A netlist reports which pins sit on which
+  nets and nothing about what a part does between them, so a four-pin package with a pin
+  on each net satisfies this whether it is a resistor or an optocoupler. Reading it as
+  "current flows here" is the reader's inference, not netspec's claim, and a review
+  demonstrated it certifying an isolation barrier.
+* **``only`` sees single-component bridges.** ``GND -R8- MID -R9- GNDPWR`` is a ground
+  loop it will not report. Searching further was tried and **rejected on evidence**: a
+  two-component search over the real board finds ``GND -U1- +12V -J1- GNDPWR`` and calls a
+  correct design looped, because every rail reaches every other through the power tree. A
+  check that fires on good boards is worse than one with a stated edge.
 
-===================================  =======================================
-a second part bridges the grounds    ``R1 also bridges GND and GNDPWR``
-the tie is bypassed, grounds merge   ``GNDPWR is not in this design``
-one channel wired differently        ``pin 5: U3 on /DIR2 matches /DIR1
-                                     elsewhere but /PWM1 here``
-===================================  =======================================
+**``mirrors(a, b)`` — two parts are wired to the same shape.** Structural, not textual:
+the pin-wise mapping between their nets must be a bijection, **and a net carried by both
+parts must map to itself**. No channel index, no string surgery on net names — the design
+note behind this proposed both and neither is needed.
 
-**``mirrors`` says little about two-pin parts**, and that is pinned by a test rather than
-left to be discovered. Any two of them with a distinct net on each pin induce a bijection,
-so they mirror — true, and nearly vacuous. It earns its keep on multi-pin parts. The pass
-detail reports how many nets were paired so a reader can see how much was checked.
+That second clause is load-bearing and was missing. Without it the rule is graph
+isomorphism, which is invariant under relabelling, so **every permutation** of one part's
+pin-to-net map passed — a VCC/GND swap included, which is the exact defect class this
+project exists to catch. The docstring asserted the invariant while the code did not
+enforce it, and no test noticed, because nothing tested the claim.
+
+A pin connected to nothing also mirrored a wired one: KiCad names each floating pin
+uniquely (``unconnected-(U3-IN-Pad1)``), so to a bare bijection it was just another
+distinct net, and a part with every pin unwired mirrored a fully wired one. A one-node net
+the *designer* named is a different thing — a deliberate label on a sheet pin — so
+anonymity is part of the test.
+
+**``mirrors`` says less the fewer pins a part has**, and further than "two-pin" admits.
+Randomly rewiring one part and asking whether it still mirrors gives roughly 51% at two
+pins, 22% at three, 10% at four, 1% at six and ~0% at eleven — and roughly doubling with
+two shared rails, the common-ground case the rule advertises handling. The real board's
+eleven-pin drivers are the strong end of that curve, not the typical one.
 
 **What ``mirrors`` cannot see**: it compares two parts, so a block is several rules, and a
-change that leaves both instances equally wrong is invisible to it. Comparing two *sheet
-instances* wholesale would need a component correspondence between them, which is a
-matching problem this does not attempt.
+change leaving both instances equally wrong is invisible. Comparing two sheet instances
+wholesale needs a component correspondence between them, which this does not attempt.
 
-Both are symmetric in their arguments and key accordingly (D23): ``through(a, R, b)`` and
-``through(b, R, a)`` are one assertion, as are ``mirrors(x, y)`` and ``mirrors(y, x)``.
+Both are symmetric in their arguments and key accordingly (D23). Both refuse a wrong-arity
+tuple on the dataclass, not only in the helper, because ``isolate.py`` rebuilds them from
+JSON — the same reason ``Forbid`` carries that guard. An absent part is ``skipped``,
+matching ``polarity`` and D9's taxonomy, which the first version diverged from silently.
 
 ## D14 — Name: `netspec`
 

@@ -12,6 +12,8 @@ says what string surgery was going to approximate.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import pytest
 
 from kicad_netspec.check import check_spec
@@ -123,8 +125,13 @@ def test_parts_with_different_pins_do_not_mirror() -> None:
     assert _status(mirrors("U2", "U3"), netlist=netlist) == ["fail"]
 
 
-def test_a_part_absent_from_the_design_fails() -> None:
-    assert _status(mirrors("U2", "U9"), netlist=_two_channels()) == ["fail"]
+def test_a_part_absent_from_the_design_is_skipped_not_failed() -> None:
+    """D9's taxonomy: a rule naming a part that is not there was not evaluated. Matches
+    _check_polarity, which these two diverged from silently."""
+    assert _status(mirrors("U2", "U9"), netlist=_two_channels()) == ["skipped"]
+    assert (
+        check_spec(Spec(source="b", rules=[mirrors("U2", "U9")]), _two_channels()).verdict == "fail"
+    ), "skipped is still not green"
 
 
 def test_mirrors_is_symmetric() -> None:
@@ -167,3 +174,62 @@ def test_mirrors_says_little_about_two_pin_parts() -> None:
 
     nl = parse_kicadxml_file(Path(__file__).parent / "fixtures" / "hierarchy.expected.xml")
     assert check_spec(Spec(source="h", rules=[mirrors("R1", "R3")]), nl).verdict == "pass"
+
+
+# -- the two ways the bijection was unsound ---------------------------------------------
+
+
+def _same_nets(u3_pins: Sequence[str]):
+    """U2 on A,B,C at pins 1-3; U3 on the same three nets, in the order given."""
+    nets: dict[str, list[Node]] = {
+        "A": [Node("U2", "1")],
+        "B": [Node("U2", "2")],
+        "C": [Node("U2", "3")],
+    }
+    for pin, name in zip("123", u3_pins, strict=True):
+        nets[name].append(Node("U3", pin))
+    return build_netlist(
+        [Net(k, frozenset(v)) for k, v in nets.items()],
+        [Component("U2"), Component("U3")],
+    )
+
+
+def test_a_net_both_parts_use_must_line_up() -> None:
+    """Without this the rule is graph isomorphism, invariant under relabelling, so every
+    permutation passed -- a VCC/GND swap included."""
+    import itertools
+
+    passing = [
+        p
+        for p in itertools.permutations("ABC")
+        if check_spec(Spec(source="b", rules=[mirrors("U2", "U3")]), _same_nets(p)).verdict
+        == "pass"
+    ]
+    assert passing == [("A", "B", "C")], "only the identical wiring may mirror"
+
+
+def test_a_pin_connected_to_nothing_does_not_mirror_a_wired_one() -> None:
+    """KiCad names each floating pin uniquely, so to a bare bijection it was just another
+    distinct net -- and a part with every pin unwired mirrored a fully wired one."""
+    netlist = build_netlist(
+        [
+            Net("A", frozenset({Node("U2", "1")})),
+            Net("B", frozenset({Node("U2", "2"), Node("U3", "2")})),
+            Net("unconnected-(U3-IN-Pad1)", frozenset({Node("U3", "1")})),
+        ],
+        [Component("U2"), Component("U3")],
+    )
+    report = check_spec(Spec(source="b", rules=[mirrors("U2", "U3")]), netlist)
+    assert report.verdict == "fail"
+    assert "connected to nothing" in report.failures[0].detail
+
+
+def test_a_net_a_designer_named_is_not_treated_as_floating() -> None:
+    """`/Channel1/OUT` with one pin is a deliberate label on a sheet pin, not a dropped
+    wire, and must still pair with its opposite number."""
+    from pathlib import Path as _P
+
+    from kicad_netspec.parse import parse_kicadxml_file
+
+    nl = parse_kicadxml_file(_P(__file__).parent / "fixtures" / "hierarchy.expected.xml")
+    assert check_spec(Spec(source="h", rules=[mirrors("R1", "R2")]), nl).verdict == "pass"

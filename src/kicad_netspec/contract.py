@@ -12,7 +12,7 @@ Pins are named by function wherever the symbol offers one -- ``U1.VI`` rather th
 so an assertion written against a number can be satisfied by the very defect it was meant
 to catch.
 
-    from kicad_netspec import Spec, net, polarity, forbid
+    from kicad_netspec import Spec, forbid, mirrors, net, polarity, through
 
     board = Spec(
         source="hardware/board.kicad_sch",
@@ -21,6 +21,8 @@ to catch.
             net("+3V3", ["U1.VO", "C2.1"]),
             polarity("C1", plus="VIN", minus="GND"),
             forbid("VIN", "GND"),
+            through("GND", "NT1", "GNDPWR"),   # the only path between two grounds
+            mirrors("U2", "U3"),               # two channels, wired the same
         ],
     )
 """
@@ -206,9 +208,21 @@ class Through(Rule):
     power ground. Bypassing one, or paralleling it, leaves a netlist that reads as
     perfectly ordinary -- both nets exist, everything is connected, ERC is silent.
 
+    **This asserts pin membership, not conduction.** A netlist says which pins are on
+    which nets and nothing about what a part does between them, so a four-pin package
+    with a pin on each net satisfies this whether it is a resistor or an optocoupler.
+    Reading it as "current flows here" is the reader's inference, not netspec's claim.
+
     ``only=True`` by default, because that is what makes a star ground assertable: a
     second component bridging the same two nets is a ground loop, and it is legal wiring.
     Set it False where parts really do sit in parallel.
+
+    **``only`` sees single-component bridges.** A path through two parts in series --
+    ``GND -R8- MID -R9- GNDPWR`` -- is a ground loop it will not report. Searching
+    further was tried and rejected: on a real board, a two-component search finds
+    ``GND -U1- +12V -J1- GNDPWR`` and calls a correct design looped, because every rail
+    reaches every other through the power tree. A check that fires on good boards is
+    worse than one with a stated edge.
     """
 
     ref: str
@@ -218,6 +232,11 @@ class Through(Rule):
     kind: ClassVar[str] = "through"
 
     def __post_init__(self) -> None:
+        # Arity on the dataclass, like Forbid's: it is exported and isolate.py rebuilds
+        # it from JSON, so the helper is not the only way in. Unguarded, a three-net
+        # tuple reached __str__ and crashed with a traceback under exit 1.
+        if len(self.nets) != 2:
+            raise ValueError(f"through() joins exactly two nets, got {len(self.nets)}")
         if self.nets[0] == self.nets[1]:
             raise ValueError(f"through() needs two different nets, got {self.nets[0]!r} twice")
         if not self.ref:
@@ -252,19 +271,41 @@ class Mirrors(Rule):
     a contract can say per character, because one line covers a whole channel.
 
     Structural, not textual: the parts mirror when the pin-wise mapping between their
-    nets is a **bijection**. Pin 1 of each may sit on different nets, so long as every
-    pin agrees about which net of the other it corresponds to, and a net shared by both
-    (a common ground) maps to itself. That needs no channel index and no string surgery
-    on net names, which is what the first design of this rule was going to require.
+    nets is a **bijection**, and a net carried by *both* parts maps to itself. Pin 1 of
+    each may sit on different nets -- that is the point of a channel -- so long as every
+    pin agrees about which net of the other it corresponds to. That needs no channel
+    index and no string surgery on net names, which the first design of this rule
+    required.
+
+    The shared-net clause is load-bearing and was missing at first. Without it the rule
+    is graph isomorphism, which is invariant under relabelling, so **every** permutation
+    of one part's pin-to-net map passed -- including a VCC/GND swap, the exact defect
+    class this project exists to catch.
+
+    A pin connected to nothing does not pair with a wired one either. KiCad names each
+    floating pin uniquely (``unconnected-(U3-IN-Pad1)``), so to a bare bijection a
+    dangling pin was just another distinct net and a part with every pin unwired mirrored
+    a fully wired one.
 
     It compares two *parts*. A block is several rules, one per corresponding pair; it
     cannot see a change that leaves both instances equally wrong.
 
-    **It says little about two-pin parts.** Any two of them carrying a distinct net on
-    each pin induce a bijection, so they mirror -- a true statement that almost never
-    discriminates. The rule earns its keep on multi-pin parts, where there is a shape to
-    disagree about; the pass detail reports how many nets were paired, so a reader can
-    see how much was actually checked.
+    **It says less the fewer pins a part has**, and the effect reaches further than
+    "two-pin". Randomly rewiring one part and asking whether it still mirrors:
+
+    ======  ================  ================
+    pins    no shared rails   two shared rails
+    ======  ================  ================
+    2       ~51%              ~74%
+    3       ~22%              ~48%
+    4       ~10%              ~28%
+    6       ~1%               ~7%
+    11      ~0%               ~0.2%
+    ======  ================  ================
+
+    Measured over random rewirings; take it as the shape of the curve rather than exact
+    figures. The rule earns its keep on multi-pin parts, and the pass detail reports how
+    many nets were paired so a reader can see how much was actually checked.
     """
 
     parts: tuple[str, str]
@@ -272,6 +313,8 @@ class Mirrors(Rule):
     kind: ClassVar[str] = "mirrors"
 
     def __post_init__(self) -> None:
+        if len(self.parts) != 2:
+            raise ValueError(f"mirrors() compares exactly two parts, got {len(self.parts)}")
         if self.parts[0] == self.parts[1]:
             raise ValueError(f"{self.parts[0]!r} always mirrors itself")
 
