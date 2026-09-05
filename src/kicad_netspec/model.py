@@ -117,7 +117,7 @@ class Component:
     footprint: str | None = None
     lib_id: str | None = None
 
-    sheet: str = ""
+    attributed_sheet: str = ""
     """The sheet KiCad attributes this part to -- ``/`` when flat, ``/Channel1/`` when
     not. Empty if the netlist omitted it.
 
@@ -127,6 +127,10 @@ class Component:
     the pages -- an edit with no electrical meaning -- can change which. Read it as "a
     sheet this part appears on", never as "the sheet this part is on", and do not persist
     it: it is not stable enough to commit, which is why the snapshot omits it.
+
+    Named ``attributed_sheet`` rather than ``sheet`` for that reason. A field called
+    ``sheet`` reads as authoritative at every call site, and a docstring cannot un-say a
+    name -- the caller has to be reminded, where they use it, that KiCad chose this.
 
     KiCad offers the same path in UUIDs (``tstamps``); that form is not carried at all,
     for the reason D11 gives for avoiding unstable identifiers.
