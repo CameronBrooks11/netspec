@@ -62,14 +62,14 @@ def test_a_netlist_with_no_classes_at_all_reports_none() -> None:
     </export>"""
     nl = parse_kicadxml(doc)
     assert nl.nets["VIN"].netclasses == ()
-    assert nl.components["R1"].sheet == "", "no <sheetpath> means no sheet, not a guess"
+    assert nl.components["R1"].attributed_sheet == "", "no <sheetpath> means no sheet, not a guess"
 
 
 # -- sheet ------------------------------------------------------------------------------
 
 
 def test_a_flat_design_puts_every_component_on_the_root_sheet() -> None:
-    assert {c.sheet for c in _fixture("good_ldo").components.values()} == {"/"}
+    assert {c.attributed_sheet for c in _fixture("good_ldo").components.values()} == {"/"}
 
 
 def test_a_hierarchical_design_separates_the_repeated_block() -> None:
@@ -78,7 +78,7 @@ def test_a_hierarchical_design_separates_the_repeated_block() -> None:
 
     by_sheet: dict[str, set[str]] = {}
     for c in nl.components.values():
-        by_sheet.setdefault(c.sheet, set()).add(c.ref)
+        by_sheet.setdefault(c.attributed_sheet, set()).add(c.ref)
 
     assert by_sheet == {"/Channel1/": {"R1"}, "/Channel2/": {"R2"}, "/Aux/": {"R3"}}
 
@@ -130,7 +130,7 @@ def test_a_snapshot_holds_what_the_diff_compares_and_nothing_else() -> None:
     A repo that commits snapshots would get a red ``git diff`` beside a green ``netspec
     diff``, with nothing naming the cause -- the "spurious diff" snapshot.py's own
     docstring promises cannot happen. Sheet is worse than merely uncompared: it is not
-    stable (see Component.sheet).
+    stable (see Component.attributed_sheet).
     """
     import json
 
@@ -158,7 +158,10 @@ def test_neither_field_manufactures_a_connectivity_change() -> None:
     def board(sheet: str, classes: tuple[str, ...]):
         return build_netlist(
             [Net("VIN", frozenset({Node("R1", "1"), Node("R2", "1")}), netclasses=classes)],
-            [Component("R1", "1k", sheet=sheet), Component("R2", "1k", sheet=sheet)],
+            [
+                Component("R1", "1k", attributed_sheet=sheet),
+                Component("R2", "1k", attributed_sheet=sheet),
+            ],
         )
 
     result = diff_netlists(board("/A/", ("Default",)), board("/B/", ("Power", "Default")))

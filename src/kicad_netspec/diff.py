@@ -122,9 +122,14 @@ class PinSwap:
 
     Whether that matters depends entirely on **the part**, not on the topology. A
     reversed electrolytic capacitor and a deliberately re-pinned connector produce an
-    identical diff: two pins trading nets. Measured on a real board, every swap in a
-    genuine re-pinning commit paired up exactly the way a reversed capacitor does, so
-    pairing cannot separate them -- see ``significance``.
+    identical diff: two pins trading nets. Every swap in a genuine re-pinning commit
+    paired up exactly the way a reversed capacitor does, so pairing cannot separate them
+    -- see ``significance``.
+
+    That observation comes from running this diff across the history of one real
+    dual-channel board, which is not public and so is not reproducible from this repo.
+    Recorded as the origin of the rule rather than as a figure anyone can check;
+    ``tests/test_diff.py`` pins the cases it produced.
     """
 
     ref: str
@@ -211,9 +216,11 @@ class NetlistDiff:
     def suspicious(self) -> tuple[PinSwap, ...]:
         """Swaps that reverse a part whose terminals are not interchangeable.
 
-        Deliberately narrower than ``pin_swaps``: on a real board, a re-pinning commit
-        produced fourteen swaps and not one of them was a defect. Warning on all of them
-        would train a reader to ignore the warning.
+        Deliberately narrower than ``pin_swaps``. A single re-pinning commit on the
+        board described in :class:`PinSwap` moved fourteen connections at once and not
+        one of them was a defect -- a measurement on a design that is not public, so take
+        the number as the reason for the rule rather than as something to verify here.
+        Warning on all of them would train a reader to ignore the warning.
         """
         return tuple(s for s in self.pin_swaps if s.significance == "polarity")
 

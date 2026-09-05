@@ -470,7 +470,9 @@ Fast``; it is indistinguishable from three classes. netspec splits without strip
 the stray leading space in ``" Fast"`` survives as the only evidence something was lost.
 ``tests/fixtures/netclasses`` is a real KiCad project carrying exactly this case.
 
-**A component's sheet is one value even when its units are on several.** KiCad writes a
+**A component's sheet is one value even when its units are on several**, and the field is
+called ``attributed_sheet`` for that reason — ``sheet`` read as authoritative at every
+call site, and a docstring cannot un-say a name. KiCad writes a
 single ``<sheetpath>`` per component and chooses it by sheet traversal order, so a dual
 op-amp straddling two channels is attributed wholly to one of them — and reordering the
 pages, an edit with no electrical meaning, can change which. It is honest as "a sheet

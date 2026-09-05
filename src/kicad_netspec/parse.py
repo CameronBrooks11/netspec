@@ -115,7 +115,7 @@ def _components(root: ET.Element) -> list[Component]:
                 value=(element.findtext("value") or "").strip(),
                 footprint=(element.findtext("footprint") or "").strip() or None,
                 lib_id=lib_id,
-                sheet=sheet,
+                attributed_sheet=sheet,
             )
         )
     return out
