@@ -589,6 +589,50 @@ no report, because an environment fault is not a verdict. And ``snapshot.loads``
 with a ``schema``, and ``netspec diff`` on two reports used to answer "no change in
 connectivity" with exit 0 — green, confident, and about a different question.
 
+## D24 — The contract runs in a child process, so it cannot decide what the board is
+
+D8 makes a contract *code*, and that is not reversed here. What review established is the
+consequence D8 never wrote down: a contract runs **before** the design is read, so
+in-process it could do this —
+
+    Cli10Backend.netlist = _returns_a_board_I_made_up
+
+— after which netspec emitted a **genuine** report, its own ``check_report``, its own ids,
+a real ``kicad_version``, about a file whose entire contents were ``this is not a
+schematic at all``. Exit 0, ``PASS``. No validation of the report could catch it, because
+netspec really did produce it, and it defeated the text format identically.
+
+That is not an exotic threat. D8's *named* adversary is an agent editing a contract, and
+an agent that can weaken an assertion can equally add the line above.
+
+**So the contract executes in a child process and hands back only declarations.** The
+parent reads the netlist itself, with an oracle the contract never touched. The result
+travels through a **file**, not stdout, so nothing the contract prints — by ``print``, by
+``os.write(1, …)``, by rebinding ``sys.__stdout__``, by a subprocess inheriting the
+descriptor — can be mistaken for it. All five stdout vectors an adversarial pass found are
+closed by not using that channel at all, rather than by guarding it.
+
+**What remains, deliberately.** A hostile contract can still lie about *its own
+assertions* — declare weak ones, or none. That residue cannot be removed and should not
+be: declaring assertions is what a contract is *for*, no isolation could distinguish a
+weak declaration from an honest one, and a weakened assertion is precisely what D8's
+report diff exists to surface. A contract also names its own ``source``, so it can point
+at a schematic other than the one its reader assumes; the path used is recorded in the
+report, so that is auditable rather than hidden.
+
+The division is the point: **isolation removes lying about the design, which nothing
+downstream could ever detect. The report diff catches lying about the assertions, which it
+can.** Neither closes D8 alone.
+
+**``contract.load`` stays in-process** for the pytest plugin, where you are writing the
+test, running your own code, in your own process. ``check`` and ``guard`` use the isolated
+path.
+
+**This is an exception to D4.1** — netspec spawns processes only in the oracle, plus the
+command runner ``guard`` points at and the MCP server's one-process-per-call. Adding a
+fourth is a design change, argued here as D4.1 asks. It buys a boundary that cannot be
+had inside one interpreter.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical

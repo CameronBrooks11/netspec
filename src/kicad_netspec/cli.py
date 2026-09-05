@@ -13,7 +13,6 @@ Exit codes are part of the contract (DECISIONS D10) and mean different things::
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import sys
 from collections.abc import Sequence
@@ -22,6 +21,7 @@ from pathlib import Path
 from kicad_netspec import __version__, contract, snapshot
 from kicad_netspec.check import CheckReport, check_spec
 from kicad_netspec.diff import NetlistDiff, diff_netlists
+from kicad_netspec.isolate import ContractError, load_isolated
 from kicad_netspec.model import Netlist
 from kicad_netspec.ops.guard import guard as run_guard
 from kicad_netspec.oracle import Cli10Backend, EnvironmentError_, RuleReport, find_kicad_cli
@@ -246,20 +246,14 @@ def _print_check(report: CheckReport) -> None:
 
 
 def _check(args: argparse.Namespace) -> int:
-    # A contract is executed Python (D8), and it used to execute onto the same stdout the
-    # report is written to. That let a contract PRINT ITS OWN passing report and exit 0,
-    # which the MCP server then handed to an agent as netspec's verdict -- with kicad-cli
-    # never run. Anything the module writes goes to stderr, where it is visible and
-    # cannot be mistaken for a finding.
+    # A contract is executed Python (D8) and runs before the design is read, so in this
+    # process it could replace the oracle and have netspec report on a board it invented.
+    # It runs in a child instead and hands back only declarations; the netlist below is
+    # read here, by an oracle the contract never touched. See isolate.py.
     try:
-        with contextlib.redirect_stdout(sys.stderr):
-            spec = contract.load(args.contract)
-    except (FileNotFoundError, ImportError, ValueError) as exc:
-        raise EnvironmentError_(f"could not load contract: {exc}") from exc
-    except SystemExit as exc:
-        raise EnvironmentError_(
-            f"contract called sys.exit({exc.code!r}); it must declare, not decide"
-        ) from exc
+        spec = load_isolated(args.contract)
+    except ContractError as exc:
+        raise EnvironmentError_(str(exc)) from exc
 
     source = Path(contract.resolve_source(spec, args.contract))
     netlist = Cli10Backend().netlist(source, variant=spec.variant)
@@ -318,9 +312,9 @@ def _guard(args: argparse.Namespace) -> int:
     spec = None
     if args.contract:
         try:
-            spec = contract.load(args.contract)
-        except (FileNotFoundError, ImportError, ValueError) as exc:
-            raise EnvironmentError_(f"could not load contract: {exc}") from exc
+            spec = load_isolated(args.contract)
+        except ContractError as exc:
+            raise EnvironmentError_(str(exc)) from exc
 
     backend = Cli10Backend()
     print(f"guarding {args.schematic}")

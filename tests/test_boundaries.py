@@ -26,7 +26,8 @@ def test_never_imports_pcbnew() -> None:
 #
 #   ops/run.py  runs the command `guard` was pointed at
 #   mcp.py      runs the netspec CLI, one process per call (D18)
-SPAWN_EXEMPT = {"ops/run.py", "mcp.py"}
+#   isolate.py  runs the contract in a child, so it cannot decide what the board is (D24)
+SPAWN_EXEMPT = {"ops/run.py", "mcp.py", "isolate.py"}
 
 
 def _in_oracle(path: Path) -> bool:
@@ -69,6 +70,18 @@ def test_kicad_is_only_invoked_from_the_oracle() -> None:
     )
 
 
+def _imports_subprocess(source: str) -> bool:
+    """By AST, not by grep. The word appears in prose that explains why a module is safe."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(a.name.split(".")[0] == "subprocess" for a in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("subprocess"):
+            return True
+    return False
+
+
 def test_only_the_oracle_and_the_command_runner_spawn_processes() -> None:
     """Everything else works on the model and touches no process at all (D4.1)."""
     offenders = []
@@ -76,7 +89,7 @@ def test_only_the_oracle_and_the_command_runner_spawn_processes() -> None:
         rel = p.relative_to(SRC)
         if _in_oracle(p) or rel.as_posix() in SPAWN_EXEMPT:
             continue
-        if "subprocess" in p.read_text(encoding="utf-8"):
+        if _imports_subprocess(p.read_text(encoding="utf-8")):
             offenders.append(rel)
     assert not offenders, f"unexpected process spawning outside the oracle: {offenders}"
 
