@@ -41,6 +41,11 @@ def test_a_net_in_no_declared_class_is_still_in_Default() -> None:
 def test_a_class_name_containing_a_comma_cannot_be_recovered() -> None:
     """KiCad joins classes with ',' and does not escape them. This is lossy at the source.
 
+    The ``netclasses`` fixture is ``good_ldo``'s schematic verbatim, beside a
+    ``.kicad_pro`` that declares the classes -- a project file must be named after its
+    project, so the schematic has to be duplicated to carry one. The schematic is not
+    the variable here; the project file is.
+
     The fixture's project really does declare a class named ``Power, Fast``; KiCad writes
     ``class="Power, Fast,Default"``, which is indistinguishable from three classes. netspec
     reports the split as-is rather than stripping, so the stray leading space survives as
@@ -99,12 +104,21 @@ def test_no_parsed_field_carries_a_uuid() -> None:
 
 
 def test_no_parsed_field_carries_kicads_net_number() -> None:
-    """<net code> is renumbered by ordinary edits, so a contract must never see it."""
+    """<net code> is renumbered by ordinary edits, so a contract must never see it.
+
+    Scanned as text rather than compared as a set, so that wrapping the value in a tuple
+    or hiding it on a Node does not walk past the guard -- which exact-set equality did.
+    """
+    import re
+
+    bare_number = re.compile(r"^\D*\b[1-9]\b\D*$")
     nl = _fixture("hierarchy")
-    codes = {"1", "2", "3", "4", "6"}  # the codes in that fixture
 
     for net in nl.nets.values():
-        assert codes.isdisjoint({str(v) for v in vars(net).values()})
+        for field, value in vars(net).items():
+            if field == "nodes":
+                continue
+            assert not bare_number.search(str(value)), f"{field} looks like a net code"
 
 
 # -- neither belongs in a snapshot ------------------------------------------------------
