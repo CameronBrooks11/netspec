@@ -19,7 +19,9 @@ from kicad_netspec.model import Component, Net, Netlist, Node, build_netlist
 
 __all__ = ["SNAPSHOT_SCHEMA", "SnapshotError", "dumps", "loads", "read", "write"]
 
-SNAPSHOT_SCHEMA = 1
+SNAPSHOT_SCHEMA = 2
+"""2 added a net's class and a component's sheet. A schema-1 snapshot still reads;
+both fields are simply absent, which is what an empty value means everywhere else."""
 """Bumped only when the on-disk shape changes incompatibly."""
 
 
@@ -68,12 +70,14 @@ def _to_json(netlist: Netlist) -> dict[str, Any]:
                 "value": c.value,
                 "footprint": c.footprint,
                 "lib_id": c.lib_id,
+                "sheet": c.sheet,
             }
             for c in sorted(netlist.components.values(), key=lambda c: c.ref)
         ],
         "nets": [
             {
                 "name": net.name,
+                "netclass": net.netclass,
                 "nodes": [
                     {
                         "ref": n.ref,
@@ -105,6 +109,7 @@ def _from_json(payload: Any) -> Netlist:
     nets = [
         Net(
             name=net["name"],
+            netclass=net.get("netclass", ""),
             nodes=frozenset(
                 Node(
                     ref=n["ref"],
@@ -123,6 +128,7 @@ def _from_json(payload: Any) -> Netlist:
             value=c.get("value", ""),
             footprint=c.get("footprint"),
             lib_id=c.get("lib_id"),
+            sheet=c.get("sheet", ""),
         )
         for c in payload.get("components", ())
     ]

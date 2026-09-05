@@ -443,6 +443,37 @@ Also removed here: ``Spec.nets``, ``Spec.polarities``, ``Spec.forbidden`` and
 pattern that does not survive a real vocabulary, and each one a template an implementer
 would have copied.
 
+## D22 — The parser carries a net's class and a part's sheet, and nothing else new
+
+KiCad states both on every netlist it writes, and netspec discarded both:
+
+    <net code="1" name="+3V3" class="Default">
+    <sheetpath names="/Channel1/" tstamps="/b4a1a8da-.../"/>
+
+A net's **class** is what a power-domain or differential-pair rule is written against. A
+part's **sheet** is what lets a rule tell two instances of a repeated block apart — on a
+real dual-channel board it separates 17 root-level parts from 11 in each channel, which
+is precisely the input the symmetry primitive needs. Neither had to be invented or
+inferred; both were being thrown away by the parser.
+
+**Two things next to them are deliberately left behind.**
+
+``<net code>`` is KiCad's net *number*, and ordinary edits renumber it. ``<sheetpath
+tstamps>`` is the same path expressed in UUIDs. Both are unstable identifiers, and D11
+keeps those out of this model for a reason that applies with more force here than
+anywhere: a contract is a durable statement about a design, and an assertion written
+against a number that moves on its own is flaky by construction. Tests assert neither
+field exists.
+
+**Netclass is carried but is not part of a net's identity.** The diff compares
+membership, so renaming a class is not a connectivity change — asserted by a test,
+because adding a field to a frozen dataclass silently changes ``__eq__`` and the diff
+comparing whole objects would have started reporting class renames as design changes.
+
+**Snapshot schema 1 → 2.** A schema-1 snapshot still loads, with both fields absent —
+which reads as the empty string, the same thing they mean when a netlist omits them. A
+snapshot from a *newer* schema is still refused rather than partially understood.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical

@@ -62,6 +62,14 @@ class Net:
     name: str
     nodes: frozenset[Node]
 
+    netclass: str = ""
+    """KiCad's net class, e.g. ``Default`` or ``Power``. Empty if the netlist omitted it.
+
+    Carried because a power-domain or differential-pair rule is written against it. Not
+    part of what makes a net *the same net*: the diff compares membership, so renaming a
+    class is not a connectivity change.
+    """
+
     @property
     def anonymous(self) -> bool:
         """True when KiCad generated this name from the net's own contents (D11)."""
@@ -98,6 +106,15 @@ class Component:
     value: str = ""
     footprint: str | None = None
     lib_id: str | None = None
+
+    sheet: str = ""
+    """The sheet this part sits on, by name -- ``/`` on a flat design, ``/Channel1/`` on
+    a hierarchical one. Empty if the netlist omitted it.
+
+    This is what lets a rule tell two instances of a repeated block apart. KiCad also
+    offers the same path in UUIDs (``tstamps``); that form is deliberately not carried,
+    for the reason D11 gives for avoiding unstable identifiers generally.
+    """
 
     def __str__(self) -> str:
         return f"{self.ref} ({self.value})" if self.value else self.ref

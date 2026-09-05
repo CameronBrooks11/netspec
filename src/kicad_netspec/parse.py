@@ -77,7 +77,7 @@ def _nets(root: ET.Element) -> list[Net]:
             )
             for node in element.findall("node")
         )
-        out.append(Net(name=name, nodes=nodes))
+        out.append(Net(name=name, nodes=nodes, netclass=element.get("class", "")))
     return out
 
 
@@ -96,12 +96,17 @@ def _components(root: ET.Element) -> list[Component]:
             lib = libsource.get("lib")
             part = libsource.get("part")
             lib_id = f"{lib}:{part}" if lib and part else part or lib
+        # <sheetpath> also carries tstamps="/<uuid>/". Only the name path is taken:
+        # a UUID is exactly the kind of identifier D11 keeps out of this model.
+        sheetpath = element.find("sheetpath")
+        sheet = sheetpath.get("names", "") if sheetpath is not None else ""
         out.append(
             Component(
                 ref=ref,
                 value=(element.findtext("value") or "").strip(),
                 footprint=(element.findtext("footprint") or "").strip() or None,
                 lib_id=lib_id,
+                sheet=sheet,
             )
         )
     return out
