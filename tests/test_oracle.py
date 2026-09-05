@@ -38,6 +38,7 @@ def test_live_netlist_matches_recorded_ground_truth(oracle: Cli10Backend) -> Non
         ("dangling_wires", 0),
         ("swapped_pins", 1),
         ("reversed_polarized_cap", 1),
+        ("hierarchy", 1),
     ):
         live = oracle.netlist(FIXTURES / f"{name}.kicad_sch")
         recorded = parse_kicadxml_file(FIXTURES / f"{name}.expected.xml")

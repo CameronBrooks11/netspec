@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design>
+    <source>/home/cam/.local/state/scratch/claude-1000/-home-cam-repos-working-kicad-mcp-research/d6318458-fafb-476d-b132-66332b34fc42/scratchpad/hier/hierarchy.kicad_sch</source>
+    <date>2026-09-04T23:02:25</date>
+    <tool>Eeschema 10.0.6</tool>
+    <sheet number="1" name="/" tstamps="/">
+      <title_block>
+        <title/>
+        <company/>
+        <rev/>
+        <date/>
+        <source>hierarchy.kicad_sch</source>
+        <comment number="1" value=""/>
+        <comment number="2" value=""/>
+        <comment number="3" value=""/>
+        <comment number="4" value=""/>
+        <comment number="5" value=""/>
+        <comment number="6" value=""/>
+        <comment number="7" value=""/>
+        <comment number="8" value=""/>
+        <comment number="9" value=""/>
+      </title_block>
+    </sheet>
+    <sheet number="2" name="/Channel1/" tstamps="/b4a1a8da-bda0-48ba-92cd-4971b919d772/">
+      <title_block>
+        <title/>
+        <company/>
+        <rev/>
+        <date/>
+        <source>hierarchy_channel.kicad_sch</source>
+        <comment number="1" value=""/>
+        <comment number="2" value=""/>
+        <comment number="3" value=""/>
+        <comment number="4" value=""/>
+        <comment number="5" value=""/>
+        <comment number="6" value=""/>
+        <comment number="7" value=""/>
+        <comment number="8" value=""/>
+        <comment number="9" value=""/>
+      </title_block>
+    </sheet>
+    <sheet number="3" name="/Aux/" tstamps="/b283b2bd-9e97-495b-aa5b-ecef00ba080f/">
+      <title_block>
+        <title/>
+        <company/>
+        <rev/>
+        <date/>
+        <source>hierarchy_aux.kicad_sch</source>
+        <comment number="1" value=""/>
+        <comment number="2" value=""/>
+        <comment number="3" value=""/>
+        <comment number="4" value=""/>
+        <comment number="5" value=""/>
+        <comment number="6" value=""/>
+        <comment number="7" value=""/>
+        <comment number="8" value=""/>
+        <comment number="9" value=""/>
+      </title_block>
+    </sheet>
+    <sheet number="4" name="/Channel2/" tstamps="/336a3b8d-b956-4653-a7b6-0fb21635042a/">
+      <title_block>
+        <title/>
+        <company/>
+        <rev/>
+        <date/>
+        <source>hierarchy_channel.kicad_sch</source>
+        <comment number="1" value=""/>
+        <comment number="2" value=""/>
+        <comment number="3" value=""/>
+        <comment number="4" value=""/>
+        <comment number="5" value=""/>
+        <comment number="6" value=""/>
+        <comment number="7" value=""/>
+        <comment number="8" value=""/>
+        <comment number="9" value=""/>
+      </title_block>
+    </sheet>
+  </design>
+  <components>
+    <comp ref="R1">
+      <value>1k</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="R" description=""/>
+      <property name="Sheetname" value="Channel1"/>
+      <property name="Sheetfile" value="hierarchy_channel.kicad_sch"/>
+      <sheetpath names="/Channel1/" tstamps="/b4a1a8da-bda0-48ba-92cd-4971b919d772/"/>
+      <tstamps>bd90deb5-35c6-4889-8c81-accb7f244593</tstamps>
+      <units>
+        <unit name="A">
+          <pins>
+            <pin num="1"/>
+            <pin num="2"/>
+          </pins>
+        </unit>
+      </units>
+    </comp>
+    <comp ref="R3">
+      <value>1k</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="R" description=""/>
+      <property name="Sheetname" value="Aux"/>
+      <property name="Sheetfile" value="hierarchy_aux.kicad_sch"/>
+      <sheetpath names="/Aux/" tstamps="/b283b2bd-9e97-495b-aa5b-ecef00ba080f/"/>
+      <tstamps>91201dbb-1e9b-48b2-b2a4-d01d7d3c9b26</tstamps>
+      <units>
+        <unit name="A">
+          <pins>
+            <pin num="1"/>
+            <pin num="2"/>
+          </pins>
+        </unit>
+      </units>
+    </comp>
+    <comp ref="R2">
+      <value>1k</value>
+      <fields>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Device" part="R" description=""/>
+      <property name="Sheetname" value="Channel2"/>
+      <property name="Sheetfile" value="hierarchy_channel.kicad_sch"/>
+      <sheetpath names="/Channel2/" tstamps="/336a3b8d-b956-4653-a7b6-0fb21635042a/"/>
+      <tstamps>bd90deb5-35c6-4889-8c81-accb7f244593</tstamps>
+      <units>
+        <unit name="A">
+          <pins>
+            <pin num="1"/>
+            <pin num="2"/>
+          </pins>
+        </unit>
+      </units>
+    </comp>
+  </components>
+  <libparts>
+    <libpart lib="Device" part="R">
+      <fields>
+        <field name="Reference">R</field>
+        <field name="Value">R</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="1" name="" type="passive"/>
+        <pin num="2" name="" type="passive"/>
+      </pins>
+    </libpart>
+  </libparts>
+  <libraries>
+    <library logical="Device">
+      <uri>${KICAD10_SYMBOL_DIR}/Device.kicad_sym</uri>
+    </library>
+  </libraries>
+  <nets>
+    <net code="1" name="/Aux/IN" class="Default">
+      <node ref="R3" pin="1" pintype="passive"/>
+    </net>
+    <net code="2" name="/Aux/SENSE" class="Default">
+      <node ref="R3" pin="2" pintype="passive"/>
+    </net>
+    <net code="3" name="/Channel1/OUT" class="Default">
+      <node ref="R1" pin="2" pintype="passive"/>
+    </net>
+    <net code="4" name="/Channel2/OUT" class="Default">
+      <node ref="R2" pin="2" pintype="passive"/>
+    </net>
+    <net code="6" name="VIN" class="Default">
+      <node ref="R1" pin="1" pintype="passive"/>
+      <node ref="R2" pin="1" pintype="passive"/>
+    </net>
+  </nets>
+</export>

@@ -21,6 +21,7 @@ from typing import Literal
 
 from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Spec
 from kicad_netspec.model import Netlist
+from kicad_netspec.resolve import Resolved, resolve_spec
 
 __all__ = ["CheckReport", "CheckResult", "check_spec", "net_of_pin"]
 
@@ -80,7 +81,8 @@ class CheckReport:
 
 def check_spec(spec: Spec, netlist: Netlist) -> CheckReport:
     """Adjudicate every rule in ``spec`` against ``netlist``."""
-    results = [_check_rule(rule, netlist) for rule in spec.rules]
+    resolved = resolve_spec(spec, netlist)
+    results = [_adjudicate(rule, netlist, resolved) for rule in spec.rules]
     if spec.require_no_floating_pins:
         results.append(_check_no_floating(netlist))
     if not results:
@@ -109,20 +111,33 @@ def net_of_pin(netlist: Netlist, ref: str, pin: str) -> str | None:
     return netlist.net_of(node.ref, node.pin) if node else None
 
 
-def _check_rule(rule: Rule, netlist: Netlist) -> CheckResult:
+def _adjudicate(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult:
+    """Evaluate one rule, unless its names do not pick out one net each.
+
+    An ambiguous name is a defect in the *contract*, not a finding about the board, so
+    it is reported before the rule runs rather than resolved by guesswork. Absence is
+    left to the rule: for ``forbid`` a vanished net is the answer, not an obstacle.
+    """
+    problems = resolved.problems_for(rule)
+    if problems:
+        return CheckResult(rule=str(rule), status="fail", detail="; ".join(problems))
+    return _check_rule(rule, netlist, resolved)
+
+
+def _check_rule(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult:
     if isinstance(rule, Net):
-        return _check_net(rule, netlist)
+        return _check_net(rule, netlist, resolved)
     if isinstance(rule, Polarity):
-        return _check_polarity(rule, netlist)
+        return _check_polarity(rule, netlist, resolved)
     if isinstance(rule, Forbid):
-        return _check_forbid(rule, netlist)
+        return _check_forbid(rule, netlist, resolved)
     return CheckResult(rule=str(rule), status="unsupported", detail="unknown rule type")
 
 
-def _check_net(rule: Net, netlist: Netlist) -> CheckResult:
+def _check_net(rule: Net, netlist: Netlist, resolved: Resolved) -> CheckResult:
     label = str(rule)
 
-    found = netlist.nets.get(rule.name)
+    found = netlist.nets.get(resolved.net(rule.name) or rule.name)
     if found is None:
         return CheckResult(
             rule=label,
@@ -155,7 +170,7 @@ def _check_net(rule: Net, netlist: Netlist) -> CheckResult:
     return CheckResult(rule=label, status="pass")
 
 
-def _check_polarity(rule: Polarity, netlist: Netlist) -> CheckResult:
+def _check_polarity(rule: Polarity, netlist: Netlist, resolved: Resolved) -> CheckResult:
     label = (
         f"{rule.ref} polarity: pin {rule.plus_pin}->{rule.plus}, pin {rule.minus_pin}->{rule.minus}"
     )
@@ -166,10 +181,15 @@ def _check_polarity(rule: Polarity, netlist: Netlist) -> CheckResult:
     actual_plus = net_of_pin(netlist, rule.ref, rule.plus_pin)
     actual_minus = net_of_pin(netlist, rule.ref, rule.minus_pin)
 
+    # Compare against what the design calls these nets, so a contract may name a
+    # hierarchical net by its leaf the same way it does everywhere else.
+    want_plus = resolved.net(rule.plus) or rule.plus
+    want_minus = resolved.net(rule.minus) or rule.minus
+
     wrong = []
-    if actual_plus != rule.plus:
+    if actual_plus != want_plus:
         wrong.append(f"pin {rule.plus_pin} is on {actual_plus or 'nothing'}, expected {rule.plus}")
-    if actual_minus != rule.minus:
+    if actual_minus != want_minus:
         wrong.append(
             f"pin {rule.minus_pin} is on {actual_minus or 'nothing'}, expected {rule.minus}"
         )
@@ -178,18 +198,19 @@ def _check_polarity(rule: Polarity, netlist: Netlist) -> CheckResult:
         return CheckResult(rule=label, status="pass")
 
     # The specific, dangerous case: the two are simply the wrong way round.
-    reversed_ = actual_plus == rule.minus and actual_minus == rule.plus
+    reversed_ = actual_plus == want_minus and actual_minus == want_plus
     detail = "; ".join(wrong)
     if reversed_:
         detail += f"  -- {rule.ref} IS REVERSED. ERC does not check this."
     return CheckResult(rule=label, status="fail", detail=detail)
 
 
-def _check_forbid(rule: Forbid, netlist: Netlist) -> CheckResult:
+def _check_forbid(rule: Forbid, netlist: Netlist, resolved: Resolved) -> CheckResult:
     label = str(rule)
 
-    present = [n for n in rule.nets if n in netlist.nets]
-    absent = [n for n in rule.nets if n not in netlist.nets]
+    targets = {n: resolved.net(n) for n in rule.nets}
+    present = [n for n, t in targets.items() if t]
+    absent = [n for n, t in targets.items() if not t]
 
     # This is what a short actually looks like. KiCad does not emit a pin sitting on two
     # named nets -- it MERGES the nets and keeps one name, so the other simply
@@ -221,7 +242,7 @@ def _check_forbid(rule: Forbid, netlist: Netlist) -> CheckResult:
     seen: dict[str, str] = {}
     shared: list[str] = []
     for name in present:
-        for node in netlist.nets[name].nodes:
+        for node in netlist.nets[targets[name] or name].nodes:
             key = str(node)
             if key in seen and seen[key] != name:
                 shared.append(f"{key} is on both {seen[key]} and {name}")

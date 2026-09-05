@@ -318,6 +318,47 @@ spending a quarter of a 200K window before the agent reads a file. netspec's six
 measure ~834 tokens on the wire. Tool surface is a cost paid by every agent that
 connects, and a number in CI is the only thing that keeps it from creeping.
 
+## D19 — A contract's net names are resolved before any rule is evaluated
+
+A contract is written by a person; a netlist is named by KiCad. On a hierarchical board
+those disagree. KiCad calls a net ``/Channel1/OUT``, and a contract that says ``OUT`` is
+abbreviated rather than wrong. Before this, every such rule failed with *"there is no
+net called 'OUT' in this design"* — a message that is both untrue and unactionable, and
+which made netspec unusable on any multi-sheet design.
+
+Resolution is therefore its own phase, running over the whole contract before the first
+rule is adjudicated, with three outcomes:
+
+===========  ===========================================================================
+exact        the design has a net by exactly that name; it wins outright
+leaf         exactly one net's last path segment matches
+ambiguous    more than one matches, and there is no correct guess
+===========  ===========================================================================
+
+**The third outcome is why this is a phase and not a lookup helper.** Any design built
+from a repeated block has the same net name under several sheets — this was checked
+against a real dual-channel board, where a naive leaf name matched both channels for
+every net inside the repeated sheet. Choosing one would invent intent the contract never
+expressed, so resolution refuses and names the candidates. That is reported as a defect
+in the *contract* — the rule fails before it runs — rather than as a finding about the
+board. ``tests/fixtures/hierarchy.kicad_sch`` holds the same shape in miniature.
+
+**Ambiguity pre-empts a rule; absence does not.** They are different answers and
+collapsing them would undo the fix that taught ``forbid`` to see a real short: a net
+that has vanished is precisely how a short appears in a netlist, because KiCad merges
+the two nets and keeps one name. ``forbid`` needs to see that absence rather than be
+stopped by it. A rule that cannot pick out one
+net cannot run at all; a rule whose net is missing usually just failed.
+
+**Only net names are resolved.** Components and pins are named exactly, are unique across
+a design, and have no abbreviated form. There is nothing to resolve, so nothing is
+resolved, and `Resolution` carries no ``kind`` field it would never use.
+
+**What this does not change.** ``skipped`` still means "a part this rule names is not in
+the design", and is still not green. Whether that should instead be a failure — and
+whether ``skipped`` survives at all once variant scoping exists — is a separate question
+from name resolution and is deliberately left open here.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical

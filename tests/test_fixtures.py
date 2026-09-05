@@ -143,6 +143,7 @@ def test_reversed_polarized_cap_is_backwards_and_erc_cannot_help() -> None:
         ("dangling_wires", 0),
         ("swapped_pins", 1),
         ("reversed_polarized_cap", 1),
+        ("hierarchy", 1),
     ],
 )
 def test_fixture_ground_truth_is_stable(fixture: str, connected: int) -> None:
@@ -233,3 +234,26 @@ def test_the_two_rail_boards_differ_only_in_that_one_component() -> None:
     assert all(s.polarity_risk for s in result.pin_swaps)
     assert not result.component_changes, "same parts, same values"
     assert not result.now_floating, "nothing came loose; it was simply turned around"
+
+
+# --------------------------------------------------------------------------------------
+# Hierarchy -- the shape every real multi-sheet board has, and none of the above do.
+# --------------------------------------------------------------------------------------
+
+
+def test_hierarchy_fixture_carries_all_three_resolution_outcomes() -> None:
+    """Hand-built, because no code-first tool in the survey emits hierarchical sheets.
+
+    KiCad derived the netlist, so the *names* are its own. The design exists to hold one
+    of each thing a contract's net name can turn out to be.
+    """
+    nl = _netlist("hierarchy")
+
+    assert set(nl.nets) == {
+        "VIN",
+        "/Aux/IN",
+        "/Aux/SENSE",
+        "/Channel1/OUT",
+        "/Channel2/OUT",
+    }
+    assert {str(n) for n in nl.nets["VIN"].nodes} == {"R1.1", "R2.1"}
