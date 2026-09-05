@@ -495,21 +495,28 @@ design. The tests asserting this check *parsed values* — that no field holds a
 net code — rather than attribute names: an earlier version checked ``hasattr(Net,
 "code")`` and passed happily while a scratch build carried both under other spellings.
 
-## D23 — The report is data, and its ids exist so two reports can be aligned
+## D23 — The report is data, its ids are keys, and a contract cannot write it
 
 D2 states the product as "a persisted, schema'd report and an exit code that gates CI".
-Only the exit code existed. A result's rule was a rendered English sentence, no command
+Only the exit code existed: a result's rule was a rendered English sentence, no command
 emitted JSON, and the MCP ``check`` tool handed an agent the printed text. Three
-primitives of prose can be read; the vocabulary being built here has nine and cannot.
+primitives of prose can be read; nine cannot.
 
-``netspec check --format json`` now emits a self-describing document, and the MCP tool
-returns it parsed. The sentence is not thrown away — it is demoted to ``text``, one field
-beside the fields a machine wants.
+``netspec check --format json`` now emits a self-describing document and the MCP tool
+returns it parsed. The sentence survives as ``text``, one field beside the fields a
+machine wants.
 
-**The ``id`` is the load-bearing part, and it is there for D8.** D8 answers "an agent can
-silently weaken an assertion" with "a semantic report diff that reports removed
-assertions", and that only works if two reports can be *aligned*. The id is
-``kind:subject``:
+**A contract cannot write its own report.** A contract is executed Python (D8), and it
+used to execute onto the same stdout the report is written to — so a contract could
+``print`` a passing report, ``sys.exit(0)``, and have the MCP server hand that to an agent
+as netspec's verdict with kicad-cli never run. That is precisely the failure this project
+exists to catch, occurring inside the tool that catches it. Two locks now: contract output
+is redirected to stderr while the module loads, and the MCP layer requires the document to
+identify itself (``command == "check"``, integer schema) rather than accepting whatever
+JSON appeared. Either lock alone would do; both is cheap.
+
+**The ``id`` is a key, enforced rather than hoped for.** It is ``kind:subject``, and D8's
+"semantic report diff that reports removed assertions" needs two reports to align:
 
 ===============================  ==========================================
 same rule, run again             same id
@@ -518,25 +525,35 @@ rule about a different subject   different id
 rule deleted                     id absent
 ===============================  ==========================================
 
-So a deleted assertion goes missing from the id set while a weakened one keeps its id and
-changes its fields. Those are different findings, and a report that cannot tell them apart
-answers nothing. ``forbid``'s subject is its nets *sorted*, because ``forbid(A, B)`` and
-``forbid(B, A)`` are one assertion and must not read as two when reports are compared.
+Two things were required to make that true rather than approximately true. ``Spec``
+**refuses two rules sharing a kind and subject**, because the obvious id-keyed comparator
+keeps only the last — so an agent could smuggle a weak assertion in beside a strong one
+and the strong one would vanish from the comparison while still being enforced. And
+``forbid``'s subject is **JSON-encoded, not joined on a separator**: KiCad accepts ``|``
+and ``:`` inside a net name, so ``forbid("A|B", "C")`` and ``forbid("A", "B|C")`` keyed
+identically. Its body is sorted along with its subject, since canonicalising the key while
+leaving the body unsorted made two identical contracts align and then report a change.
 
-**D8 is not closed by this.** The report makes the diff possible and a test demonstrates
-that a removed assertion is detectable by id, but the tool that performs the comparison
-does not exist yet. Saying otherwise would be the kind of claim this project exists to
-catch.
+**A known limit, stated rather than papered over.** Dropping a net from a ``forbid``
+changes its subject, so it reads as a deletion plus an addition rather than as a
+weakening — even though the assertion now permits a short it previously banned. A
+set-valued assertion has no stable key smaller than the set. The report-diff tool will
+have to notice overlapping subjects; the report cannot do it alone.
 
-**Rules describe themselves**, on D21's pattern: a ``kind`` slug and a ``describe()``
-returning JSON-safe fields. The slug is deliberately not the class name, because a report
-is a persisted artifact and an internal rename must not silently re-key someone's stored
-one. Two boundary tests fail if a rule type declares neither — the failure mode is
-otherwise silent, since such a rule still produces a result, just an unkeyable one that
-quietly stops being alignable.
+**D8 is still not closed.** The report makes the diff possible and the tests demonstrate a
+removal is detectable, but the tool that performs the comparison does not exist. Both
+review passes independently wrote their own comparator to test this, which is the evidence
+that it is missing.
 
-**An environment fault keeps its raw text.** Exit 4 prints a message, not a report, and an
-agent must still be able to read why netspec could not look (D10).
+**Smaller things the reviews earned.** ``verdict_reason``, because ``verdict: fail`` beside
+``fail: 0`` was a puzzle solvable only by knowing D9. ``contract`` and ``name``, because two
+entirely different contracts otherwise produced byte-identical reports — poor footing for a
+document whose job is noticing tampering. Synthetic results are ``kind: "spec"`` with real
+subjects rather than a ``none`` that read as *absence* when it meant *not-a-rule*. The rule's
+fields are spread **before** the report's own, so a rule cannot overwrite its own ``status``.
+And ``snapshot.loads`` refuses a check report: both are JSON with a ``schema``, and ``netspec
+diff`` on two reports used to answer "no change in connectivity" with exit 0 — green,
+confident, and about a different question than the one asked.
 
 ## D14 — Name: `netspec`
 

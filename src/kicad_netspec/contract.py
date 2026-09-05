@@ -27,6 +27,7 @@ to catch.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
@@ -164,12 +165,17 @@ class Forbid(Rule):
         return self.nets
 
     def describe(self) -> dict[str, Any]:
-        # Sorted: forbid(A, B) and forbid(B, A) are the same assertion, and must not
-        # read as two different ones when two reports are aligned.
-        return {"subject": " | ".join(sorted(self.nets)), "nets": list(self.nets)}
+        # Sorted throughout, not just in the subject: forbid(A, B) and forbid(B, A) are
+        # one assertion. Canonicalising the key but leaving the body unsorted made the
+        # two align and then report a change, which cancels the benefit exactly.
+        # JSON-encoded rather than joined on a separator: KiCad accepts "|" (and ":")
+        # inside a net name, so `forbid("A|B", "C")` and `forbid("A", "B|C")` joined to
+        # the same string and keyed to one id -- two different assertions, one key.
+        ordered = sorted(self.nets)
+        return {"subject": json.dumps(ordered), "nets": ordered}
 
     def __str__(self) -> str:
-        return f"{' and '.join(self.nets)} must stay separate"
+        return f"{' and '.join(sorted(self.nets))} must stay separate"
 
 
 @dataclass(frozen=True)
@@ -201,9 +207,22 @@ class Spec:
     def __post_init__(self) -> None:
         if not self.source:
             raise ValueError("a Spec needs a source schematic")
+        seen: dict[tuple[str, str], Rule] = {}
         for rule in self.rules:
             if not isinstance(rule, Rule):
                 raise TypeError(f"not a rule: {rule!r}")
+            # The report keys a result by kind:subject so two runs can be aligned and a
+            # deleted assertion told from a weakened one (D23). Two rules sharing that
+            # key destroy the property -- and worse, they are how an agent could smuggle
+            # a weak assertion in beside a strong one, since the obvious id-keyed
+            # comparator keeps only the last. Refuse rather than let the guarantee rot.
+            key = (rule.kind, str(rule.describe().get("subject", "")))
+            if key in seen:
+                raise ValueError(
+                    f"two {rule.kind} rules about {key[1]!r}: {seen[key]} / {rule}. "
+                    "Combine them; a contract states one thing per subject."
+                )
+            seen[key] = rule
         object.__setattr__(self, "rules", tuple(self.rules))
 
     def __str__(self) -> str:
@@ -218,7 +237,15 @@ def net(name: str, pins: Iterable[str], *, exact: bool = True) -> Net:
 
     ``exact=False`` asserts only that the listed pins are present, allowing others.
     """
-    return Net(name=name, pins=tuple(pins), exact=exact)
+    if not name:
+        raise ValueError("net() needs a net name")
+    listed = tuple(pins)
+    if not listed:
+        # "carries at least nothing" is true of every net; "carries exactly nothing" is
+        # true of none. Either way the rule cannot discriminate, and a contract full of
+        # them reports a confident pass while asserting no connectivity at all.
+        raise ValueError(f"net({name!r}) lists no pins, so it asserts nothing")
+    return Net(name=name, pins=listed, exact=exact)
 
 
 def polarity(

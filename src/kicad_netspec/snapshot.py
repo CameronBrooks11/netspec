@@ -100,6 +100,16 @@ def _from_json(payload: Any) -> Netlist:
     if not isinstance(payload, dict):
         raise SnapshotError("expected a JSON object")
 
+    # A check report is also JSON, also carries a `schema`, and also lives in a .json
+    # file. Loaded as a snapshot it yields no nets, so `netspec diff` on two reports said
+    # "no change in connectivity" and exited 0 -- a confident answer to a question nobody
+    # asked, in the exact situation where someone is looking for a weakened assertion.
+    if "command" in payload:
+        raise SnapshotError(
+            f"this is a netspec {payload['command']!r} report, not a snapshot. "
+            "`diff` compares connectivity; it cannot compare reports."
+        )
+
     schema = payload.get("schema")
     if schema is None:
         raise SnapshotError("not a netspec snapshot (no schema field)")

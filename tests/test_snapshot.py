@@ -62,3 +62,21 @@ def test_write_and_read(tmp_path) -> None:
     path = snapshot.write(_sample(), tmp_path / "nested" / "snap.json")
     assert path.exists()
     assert diff_netlists(snapshot.read(path), _sample()).empty
+
+
+def test_a_check_report_is_not_mistaken_for_a_snapshot() -> None:
+    """Both are JSON with a `schema`. Loading a report as a snapshot found no nets, so
+    `netspec diff` on two reports answered "no change in connectivity" and exited 0 --
+    green, confident, and about something other than what was asked."""
+    import json as _json
+
+    from kicad_netspec.check import check_spec
+    from kicad_netspec.contract import Spec, net
+    from kicad_netspec.model import Component, Net, Node, build_netlist
+    from kicad_netspec.report import check_report
+
+    nl = build_netlist([Net("VIN", frozenset({Node("R1", "1")}))], [Component("R1", "1k")])
+    document = check_report(check_spec(Spec(source="b", rules=[net("VIN", ["R1.1"])]), nl))
+
+    with pytest.raises(snapshot.SnapshotError, match="not a snapshot"):
+        snapshot.loads(_json.dumps(document))

@@ -33,42 +33,69 @@ REPORT_SCHEMA = 1
 _STATUSES = ("pass", "fail", "unsupported", "skipped")
 
 
-def check_report(report: CheckReport) -> dict[str, Any]:
-    """Render an adjudicated contract as a JSON-safe document."""
+def check_report(report: CheckReport, *, contract: str = "", name: str = "") -> dict[str, Any]:
+    """Render an adjudicated contract as a JSON-safe document.
+
+    ``contract`` and ``name`` identify where the assertions came from. Without them two
+    entirely different contracts produce byte-identical reports, which is a poor footing
+    for a document whose stated job (D8) is noticing that a contract was tampered with.
+    """
+    counts = {s: len(report.of_status(s)) for s in _STATUSES}
     return {
         "schema": REPORT_SCHEMA,
         "netspec": __version__,
-        "kind": "check",
+        "command": "check",
+        "contract": contract,
+        "name": name,
         "source": report.source,
         "kicad_version": report.kicad_version,
         "verdict": report.verdict,
-        "counts": {s: len(report.of_status(s)) for s in _STATUSES},
+        "verdict_reason": _why(report.verdict, counts),
+        "counts": counts,
         "results": [_result(r) for r in report.results],
     }
 
 
+def _why(verdict: str, counts: dict[str, int]) -> str:
+    """Say why, because ``verdict: fail`` beside ``fail: 0`` is otherwise a puzzle.
+
+    Only ``pass`` is green (D9): a skipped rule was not evaluated and an unsupported one
+    could not be, and neither has been satisfied. The text format prints that note; the
+    machine format used to leave a reader to infer it.
+    """
+    if verdict == "pass":
+        return "every rule passed"
+    not_green = [s for s in ("fail", "skipped", "unsupported") if counts[s]]
+    if not any(counts.values()):
+        return "the contract asserted nothing"
+    return "not green: " + ", ".join(f"{counts[s]} {s}" for s in not_green)
+
+
 def _result(result: CheckResult) -> dict[str, Any]:
     data = dict(result.data)
-    kind = str(data.pop("kind", "") or "none")
+    kind = str(data.pop("kind", "") or "unknown")
     subject = str(data.pop("subject", ""))
 
+    # The rule's own fields go in first: spreading them last let a third-party rule
+    # returning {"status": "pass"} from describe() overwrite its actual adjudication.
     return {
+        **data,
         "id": _identify(kind, subject, result.rule),
         "kind": kind,
         "subject": subject,
         "status": result.status,
         "detail": result.detail,
         "text": result.rule,
-        **data,
     }
 
 
 def _identify(kind: str, subject: str, text: str) -> str:
     """``kind:subject`` where there is one, else a digest of the rendered sentence.
 
-    A synthetic result -- "this contract asserts nothing", or a rule type with no checker
-    -- corresponds to no rule and so has no subject. It still needs an id that does not
-    collide with the next one, and hashing the only thing it has is honest about that.
+    Ordinary rules always have both, and ``Spec`` refuses two rules sharing them, so an
+    id is a real key rather than a hopeful one. The fallback is for a result that
+    corresponds to no rule at all -- a rule type with no checker (``unknown``) -- which
+    still needs an id that will not collide with the next one.
     """
     if subject:
         return f"{kind}:{subject}"

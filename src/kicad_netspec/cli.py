@@ -13,6 +13,7 @@ Exit codes are part of the contract (DECISIONS D10) and mean different things::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 from collections.abc import Sequence
@@ -245,17 +246,28 @@ def _print_check(report: CheckReport) -> None:
 
 
 def _check(args: argparse.Namespace) -> int:
+    # A contract is executed Python (D8), and it used to execute onto the same stdout the
+    # report is written to. That let a contract PRINT ITS OWN passing report and exit 0,
+    # which the MCP server then handed to an agent as netspec's verdict -- with kicad-cli
+    # never run. Anything the module writes goes to stderr, where it is visible and
+    # cannot be mistaken for a finding.
     try:
-        spec = contract.load(args.contract)
+        with contextlib.redirect_stdout(sys.stderr):
+            spec = contract.load(args.contract)
     except (FileNotFoundError, ImportError, ValueError) as exc:
         raise EnvironmentError_(f"could not load contract: {exc}") from exc
+    except SystemExit as exc:
+        raise EnvironmentError_(
+            f"contract called sys.exit({exc.code!r}); it must declare, not decide"
+        ) from exc
 
     source = Path(contract.resolve_source(spec, args.contract))
     netlist = Cli10Backend().netlist(source, variant=spec.variant)
     report = check_spec(spec, netlist)
 
     if getattr(args, "format", "text") == "json":
-        print(json.dumps(check_report(report), indent=2, sort_keys=False))
+        document = check_report(report, contract=str(args.contract), name=spec.name)
+        print(json.dumps(document, indent=2, sort_keys=False))
     else:
         print(f"{source}")
         _print_check(report)

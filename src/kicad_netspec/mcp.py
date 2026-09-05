@@ -64,17 +64,32 @@ def run_cli(*args: str) -> dict[str, Any]:
 
 
 def _with_report(result: dict[str, Any]) -> dict[str, Any]:
-    """Replace the printed text with the parsed document, when there is one.
+    """Replace the printed text with the parsed document, when there is a real one.
 
-    An environment fault (exit 4) prints a message, not a report, so the raw output is
-    kept in that case -- an agent must still be able to read why netspec could not look.
+    Validated rather than merely parsed. A contract is executed Python that shares this
+    process tree, so "some JSON appeared on stdout" is not evidence netspec produced it;
+    the document has to identify itself. The CLI now also keeps contract output off
+    stdout, so this is the second of two locks rather than the only one.
+
+    An environment fault (exit 4) prints a message, not a report, and the raw output is
+    kept -- an agent must still be able to read why netspec could not look (D10). Either
+    way ``report_unavailable`` says so explicitly, because a silently missing key is
+    indistinguishable from a key an agent forgot to read.
     """
     text = result.get("output") or ""
+    without_text = {k: v for k, v in result.items() if k != "output"}
+
     try:
         parsed = json.loads(text)
     except (TypeError, ValueError):
-        return result
-    without_text = {k: v for k, v in result.items() if k != "output"}
+        reason = "netspec printed no report" if not text.strip() else "output was not JSON"
+        return {**result, "report_unavailable": reason}
+
+    if not isinstance(parsed, dict) or parsed.get("command") != "check":
+        return {**result, "report_unavailable": "output was JSON, but not a netspec report"}
+    if not isinstance(parsed.get("schema"), int):
+        return {**result, "report_unavailable": "report carries no schema version"}
+
     return {**without_text, "report": parsed}
 
 
