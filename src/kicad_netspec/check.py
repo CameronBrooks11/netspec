@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
-from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Spec
+from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Spec, Unknown
 from kicad_netspec.model import Netlist
 from kicad_netspec.resolve import Resolved, resolve_spec
 
@@ -168,6 +168,18 @@ def _adjudicate(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult
     # result the report cannot key, and nothing would say so.
     outcome = checker(rule, netlist, resolved)
     return replace(outcome, data=described) if not outcome.data else outcome
+
+
+@checks(Unknown)
+def _check_unknown(rule: Unknown, netlist: Netlist, resolved: Resolved) -> CheckResult:
+    return CheckResult(
+        rule=str(rule),
+        status="fail",
+        detail=(
+            f"the contract declares a {rule.declared!r} rule; this netspec has no "
+            "vocabulary for it, so the assertion was not evaluated"
+        ),
+    )
 
 
 @checks(Net)

@@ -386,3 +386,33 @@ def test_two_at_least_rules_about_one_net_compose_rather_than_fail() -> None:
 def test_two_exact_rules_about_one_net_are_still_refused() -> None:
     with pytest.raises(ValueError, match="two net rules"):
         Spec(source="b", rules=[net("VIN", ["R1.1"]), net("VIN", ["C1.1"])])
+
+
+def test_the_action_records_the_design_digest(tmp_path, monkeypatch) -> None:
+    """ci._one is the merge-gating path, and no test exercised it with a contract -- so a
+    NameError on the digest line sat behind a green suite. D24 leans on it being here."""
+    from typing import cast
+
+    from kicad_netspec import ci
+    from kicad_netspec.oracle import Cli10Backend  # noqa: F401 - for the cast
+
+    board = _board()
+
+    class _Backend:
+        def netlist(self, path, variant=None):
+            return board
+
+    contract = tmp_path / "c.py"
+    contract.write_text("x = 1\n")
+    monkeypatch.setattr(
+        ci, "load_isolated", lambda _p: Spec(source="b", rules=[net("VIN", ["R1.1", "C1.1"])])
+    )
+
+    section, _changed, _suspicious, failed = ci._one(
+        cast("Cli10Backend", _Backend()), tmp_path / "b.kicad_sch", "", str(contract)
+    )
+
+    from kicad_netspec.report import design_digest
+
+    assert design_digest(board) in section, "the Action must record what it adjudicated"
+    assert failed is False

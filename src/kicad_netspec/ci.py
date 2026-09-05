@@ -20,12 +20,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-from kicad_netspec import contract as contract_mod
 from kicad_netspec.check import CheckReport, check_spec
 from kicad_netspec.diff import NetlistDiff, diff_netlists
+from kicad_netspec.isolate import load_isolated
 from kicad_netspec.model import Netlist
 from kicad_netspec.ops.run import run_command
 from kicad_netspec.oracle import Cli10Backend, EnvironmentError_
+from kicad_netspec.report import design_digest
 
 __all__ = ["main", "render"]
 
@@ -79,13 +80,20 @@ def _one(
 
     check: CheckReport | None = None
     if contract_path:
-        spec = contract_mod.load(contract_path)
+        # Isolated, like `check` and `guard` (D24). This is the highest-stakes consumer
+        # -- it posts a verdict as a pull-request comment and gates merges -- and it was
+        # left on the in-process path when the others were converted.
+        spec = load_isolated(contract_path)
         check = check_spec(spec, head)
 
     base = _base_version(backend, path, base_ref) if base_ref else None
     result = diff_netlists(base, head) if base is not None else None
 
-    body = [f"### `{path}`", ""]
+    # Recorded here too: D24 leans on the digest to make an on-disk schematic swap
+    # detectable, and the scenario it describes is a CI one. Emitting it only from
+    # `check --format json` left the merge-gating consumer without it.
+    digest = design_digest(head)
+    body = [f"### `{path}`", "", f"<sub>design `{digest}`</sub>", ""]
     if result is None:
         body.append(
             f"_No base revision to compare against_ — {len(head.components)} components, "

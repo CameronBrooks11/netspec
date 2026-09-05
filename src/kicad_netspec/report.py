@@ -20,12 +20,14 @@ the fields a machine actually wants.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from kicad_netspec import __version__
 from kicad_netspec.check import CheckReport, CheckResult
+from kicad_netspec.model import Netlist
 
-__all__ = ["REPORT_SCHEMA", "check_report"]
+__all__ = ["REPORT_SCHEMA", "check_report", "design_digest"]
 
 REPORT_SCHEMA = 1
 """Bumped when the document's shape changes in a way a reader could trip over."""
@@ -33,7 +35,44 @@ REPORT_SCHEMA = 1
 _STATUSES = ("pass", "fail", "unsupported", "skipped")
 
 
-def check_report(report: CheckReport, *, contract: str = "", name: str = "") -> dict[str, Any]:
+def design_digest(netlist: Netlist) -> str:
+    """A stable fingerprint of the connectivity netspec actually read.
+
+    Over the **design**, not the file and not the snapshot. A snapshot embeds the
+    absolute ``source`` path and the KiCad version, so hashing one gave the same board
+    two digests when it was read from two checkouts -- which breaks the only workflow
+    this exists for: recompute from the committed files and compare. It covers every
+    sheet of a hierarchical design, because it is taken over KiCad's fully expanded
+    netlist rather than the root file.
+
+    It exists because isolation (D24) cannot stop a contract swapping the schematic on
+    disk before the parent reads it. Recording this makes such a swap **detectable**.
+    Detection, not prevention, and D24 says so.
+    """
+    canonical = json.dumps(
+        {
+            "components": [
+                [c.ref, c.value, c.footprint, c.lib_id]
+                for c in sorted(netlist.components.values(), key=lambda c: c.ref)
+            ],
+            "nets": [
+                [net.name, sorted(f"{n.ref}.{n.pin}" for n in net.nodes)]
+                for net in sorted(netlist.nets.values(), key=lambda n: n.name)
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def check_report(
+    report: CheckReport,
+    *,
+    contract: str = "",
+    name: str = "",
+    netlist: Netlist | None = None,
+) -> dict[str, Any]:
     """Render an adjudicated contract as a JSON-safe document.
 
     ``contract`` and ``name`` identify where the assertions came from. Without them two
@@ -48,6 +87,7 @@ def check_report(report: CheckReport, *, contract: str = "", name: str = "") -> 
         "contract": contract,
         "name": name,
         "source": report.source,
+        "design_digest": design_digest(netlist) if netlist is not None else "",
         "kicad_version": report.kicad_version,
         "verdict": report.verdict,
         "verdict_reason": _why(report.verdict, counts),

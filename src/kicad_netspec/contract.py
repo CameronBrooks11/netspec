@@ -35,6 +35,7 @@ from typing import Any, ClassVar
 __all__ = [
     "Forbid",
     "Net",
+    "Unknown",
     "Polarity",
     "Rule",
     "Spec",
@@ -169,6 +170,13 @@ class Forbid(Rule):
 
     kind: ClassVar[str] = "forbid"
 
+    def __post_init__(self) -> None:
+        # On the dataclass for the reason Net's is: Forbid is exported, and the JSON
+        # rebuild in isolate.py is a second constructor the forbid() helper never sees.
+        # `Forbid(nets=())` adjudicated as pass while asserting nothing.
+        if len(self.nets) < 2:
+            raise ValueError("a forbid rule needs at least two nets to keep apart")
+
     def net_names(self) -> tuple[str, ...]:
         return self.nets
 
@@ -184,6 +192,31 @@ class Forbid(Rule):
 
     def __str__(self) -> str:
         return f"{' and '.join(sorted(self.nets))} must stay separate"
+
+
+@dataclass(frozen=True)
+class Unknown(Rule):
+    """A rule this netspec has no vocabulary for, carried so it can be reported.
+
+    Reached only through the isolated loader (D24): a contract may define its own
+    ``Rule`` subclass, which the parent process has never imported. Before this, that
+    raised and the CLI reported an *environment* fault -- exit 4, "this says nothing
+    about your design" -- when the truth is a statement about the contract. It now
+    adjudicates as a failure, which is what the in-process path always did.
+    """
+
+    declared: str
+
+    kind: ClassVar[str] = "unknown"
+
+    def net_names(self) -> tuple[str, ...]:
+        return ()
+
+    def describe(self) -> dict[str, Any]:
+        return {"subject": self.declared}
+
+    def __str__(self) -> str:
+        return f"a {self.declared!r} rule, which this netspec does not understand"
 
 
 def _merge(first: Rule, second: Rule) -> Rule | None:
@@ -288,8 +321,6 @@ def polarity(
 
 def forbid(*nets: str) -> Forbid:
     """Assert two or more nets never merge."""
-    if len(nets) < 2:
-        raise ValueError("forbid() needs at least two nets")
     return Forbid(nets=tuple(nets))
 
 
@@ -337,6 +368,9 @@ def resolve_source(spec: Spec, contract_path: str | None = None) -> str:
 
     source = Path(spec.source).expanduser()
     if source.is_absolute() or contract_path is None:
-        return str(source)
+        # Resolved like the relative branch. The report records the path it read, and a
+        # contract can create a symlink, so an unresolved absolute path would name the
+        # link while the design came from somewhere else (D24).
+        return str(source.resolve())
     base = Path(contract_path.partition(":")[0]).expanduser().resolve().parent
     return str((base / source).resolve())

@@ -589,6 +589,94 @@ no report, because an environment fault is not a verdict. And ``snapshot.loads``
 with a ``schema``, and ``netspec diff`` on two reports used to answer "no change in
 connectivity" with exit 0 — green, confident, and about a different question.
 
+## D24 — The contract runs in a child, which raises the bar and does not close the door
+
+D8 makes a contract *code*, and that is not reversed. What review established is the
+consequence D8 never wrote down: a contract runs **before** the design is read, so
+in-process it could replace the oracle and netspec would emit a genuine passing report
+about a file containing ``this is not a schematic at all``.
+
+The contract now executes in a child process and hands back only declarations; the parent
+reads the netlist itself. **State plainly what that buys, because an earlier draft of this
+entry did not and was wrong.**
+
+### What it closes
+
+Every route by which a contract could speak as netspec **through its own descriptors**.
+The result travels through a file rather than stdout, so ``print``, ``os.write(1, …)``,
+rebinding ``sys.__stdout__``, ``os.dup2`` and a subprocess inheriting the descriptor are
+closed by not using that channel — not by guarding it, which is what the previous attempt
+did and why it failed.
+
+An earlier draft of this said "every route", full stop. That is wrong: a contract can open
+``/proc/<ppid>/fd/1`` and write onto the parent's *actual* stdout. What that buys is
+bounded and was measured — it can **prepend** text, so a naive line-reading consumer of
+the text format can be shown a fake ``PASS``; it cannot suppress netspec's own report,
+cannot change the exit code, and against the structured consumer it only corrupts the JSON
+into ``report_unavailable``. A denial of report, not a false verdict. Closing it properly
+means a sandboxed child, which is the same answer as the swap below.
+The child's own output goes to a file too, because a detached grandchild inheriting the
+parent's *pipes* held ``communicate()`` open and could deterministically rewrite the
+result after the child had finished. The child ends with ``os._exit`` so that an
+``atexit`` handler or a non-daemon thread gets no turn after the write. It also cannot
+mutate the parent's module state, and a syntax error in a contract now reports as an
+environment fault instead of crashing with a traceback and exit 1 — a D10 violation that
+predated this.
+
+### What it does not close, verified
+
+**A contract can swap the schematic on disk.** It runs as the same user on the same
+filesystem before the parent reads the design, so it can put a different board at the path
+it named and have a detached grandchild put the original back afterwards. Reproduced: a
+board that honestly fails five rules reports ``PASS`` with no trace. Isolation moved the
+contract into another *process*, not another *filesystem view*, and the design is read
+from the filesystem they share.
+
+So the report records a **``design_digest``** — a SHA-256 over the canonical snapshot of
+what netspec actually read. Taken over the snapshot rather than the file because it is
+stable run-to-run by construction and covers every sheet of a hierarchical design. That
+makes a swap **detectable**: recompute it from the committed files and compare. It is
+detection, not prevention, and the difference matters.
+
+**Prevention needs a sandbox** — a child with no write access outside a scratch directory.
+That is OS-specific, a hard dependency on the host, and is **not built**.
+
+**A contract can still declare whatever it likes**, including substituting its own result
+for the one its readable text would produce. That residue is deliberate: declaring
+assertions is what a contract is *for*, no isolation could distinguish a weak declaration
+from an honest one, and the rules adjudicated are recorded in the report, so the divergence
+is auditable. A weakened assertion is what D8's report diff exists to surface.
+
+**A contract can deny service** — kill the parent, or exhaust it. Neither produces a false
+pass.
+
+### The division of labour
+
+Isolation reduces what a contract can lie about. The digest makes the remaining lie
+detectable. The report diff catches lying about the assertions. **None of the three closes
+D8 alone, and the first two were claimed to do more than they do until an adversarial pass
+proved otherwise.**
+
+### Consumers
+
+``check``, ``guard`` **and ``ci``** use the isolated path. ``ci`` is the one that posts a
+verdict as a pull-request comment and gates merges, and it was left on the in-process path
+when the other two were converted — found by review, not by me. ``contract.load`` stays
+in-process for the pytest plugin, where you are writing the test in your own process.
+
+A rule kind the parent does not know is carried as an ``Unknown`` finding rather than
+raised, so a contract defining its own ``Rule`` subclass still reports exit 1 — a statement
+about the contract — instead of exit 4, which would claim netspec could not look.
+
+### D4.1 exception
+
+netspec spawns processes only in the oracle, plus ``guard``'s command runner and the MCP
+server. This is a fourth, argued here as D4.1 asks. The boundary test enforcing it caught
+the change correctly — and turned out to have been rewritten, by me, into something
+strictly *weaker* than the string check it replaced: an AST-only scan missed
+``__import__("subprocess")``, which grep caught for free. It is now the union of both,
+with docstrings stripped so prose explaining why a module is safe does not trip it.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical
