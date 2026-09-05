@@ -63,6 +63,21 @@ def run_cli(*args: str) -> dict[str, Any]:
     }
 
 
+def _with_report(result: dict[str, Any]) -> dict[str, Any]:
+    """Replace the printed text with the parsed document, when there is one.
+
+    An environment fault (exit 4) prints a message, not a report, so the raw output is
+    kept in that case -- an agent must still be able to read why netspec could not look.
+    """
+    text = result.get("output") or ""
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return result
+    without_text = {k: v for k, v in result.items() if k != "output"}
+    return {**without_text, "report": parsed}
+
+
 _MEANING = {
     0: "clean",
     1: "a finding about the design",
@@ -134,10 +149,15 @@ def build_server() -> FastMCP:
         Executes the contract module. Statuses are pass, fail, unsupported and skipped;
         only pass is green, and a skipped rule was not evaluated rather than satisfied.
 
+        Returns the structured report, not the printed text: every result carries the
+        rule as fields plus a stable id, so two runs can be compared to see whether an
+        assertion was removed or quietly weakened.
+
         Args:
             contract: path to a contract module, optionally 'file.py:name'
         """
-        return run_cli("check", contract)
+        result = run_cli("check", contract, "--format", "json")
+        return _with_report(result)
 
     @server.tool()
     def gate(design: str, fail_on: str = "error") -> dict[str, Any]:

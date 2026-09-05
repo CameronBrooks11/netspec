@@ -495,6 +495,49 @@ design. The tests asserting this check *parsed values* — that no field holds a
 net code — rather than attribute names: an earlier version checked ``hasattr(Net,
 "code")`` and passed happily while a scratch build carried both under other spellings.
 
+## D23 — The report is data, and its ids exist so two reports can be aligned
+
+D2 states the product as "a persisted, schema'd report and an exit code that gates CI".
+Only the exit code existed. A result's rule was a rendered English sentence, no command
+emitted JSON, and the MCP ``check`` tool handed an agent the printed text. Three
+primitives of prose can be read; the vocabulary being built here has nine and cannot.
+
+``netspec check --format json`` now emits a self-describing document, and the MCP tool
+returns it parsed. The sentence is not thrown away — it is demoted to ``text``, one field
+beside the fields a machine wants.
+
+**The ``id`` is the load-bearing part, and it is there for D8.** D8 answers "an agent can
+silently weaken an assertion" with "a semantic report diff that reports removed
+assertions", and that only works if two reports can be *aligned*. The id is
+``kind:subject``:
+
+===============================  ==========================================
+same rule, run again             same id
+same rule, quietly weakened      **same id**, different body
+rule about a different subject   different id
+rule deleted                     id absent
+===============================  ==========================================
+
+So a deleted assertion goes missing from the id set while a weakened one keeps its id and
+changes its fields. Those are different findings, and a report that cannot tell them apart
+answers nothing. ``forbid``'s subject is its nets *sorted*, because ``forbid(A, B)`` and
+``forbid(B, A)`` are one assertion and must not read as two when reports are compared.
+
+**D8 is not closed by this.** The report makes the diff possible and a test demonstrates
+that a removed assertion is detectable by id, but the tool that performs the comparison
+does not exist yet. Saying otherwise would be the kind of claim this project exists to
+catch.
+
+**Rules describe themselves**, on D21's pattern: a ``kind`` slug and a ``describe()``
+returning JSON-safe fields. The slug is deliberately not the class name, because a report
+is a persisted artifact and an internal rename must not silently re-key someone's stored
+one. Two boundary tests fail if a rule type declares neither — the failure mode is
+otherwise silent, since such a rule still produces a result, just an unkeyable one that
+quietly stops being alignable.
+
+**An environment fault keeps its raw text.** Exit 4 prints a message, not a report, and an
+agent must still be able to read why netspec could not look (D10).
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical

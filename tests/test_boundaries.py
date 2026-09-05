@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "kicad_netspec"
@@ -159,3 +160,31 @@ def test_every_rule_type_declares_the_nets_it_names() -> None:
     assert Polarity("C1", "VIN", "GND").net_names() == ("VIN", "GND")
     assert Forbid(("A", "B")).net_names() == ("A", "B")
     assert len(expect) <= len(Rule.__subclasses__())
+
+
+def test_every_rule_type_can_appear_in_the_report() -> None:
+    """A rule with no `kind` or no `subject` produces a result the report cannot key.
+
+    Nothing would fail: it would land under kind "none" with an id derived from its
+    English sentence, so it would silently stop being alignable across runs -- which is
+    the one property D8 depends on. Guarded here rather than discovered later.
+    """
+    from kicad_netspec.contract import Rule
+
+    for kind in Rule.__subclasses__():
+        assert kind.kind, f"{kind.__name__} declares no kind slug"
+        assert "describe" in vars(kind), f"{kind.__name__} does not declare describe()"
+
+
+def test_every_rule_describes_a_subject_and_stays_json_safe() -> None:
+    from kicad_netspec.contract import Forbid, Net, Polarity, Rule
+
+    samples = [Net("VIN", ("R1.1",)), Polarity("C1", "VIN", "GND"), Forbid(("VIN", "GND"))]
+    assert {type(s) for s in samples} == set(Rule.__subclasses__()), (
+        "a rule type exists that this test does not sample"
+    )
+
+    for rule in samples:
+        described = rule.describe()
+        assert described.get("subject"), f"{rule.kind} describes no subject"
+        json.dumps(described)  # a tuple or frozenset would raise here

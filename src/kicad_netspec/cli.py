@@ -13,6 +13,7 @@ Exit codes are part of the contract (DECISIONS D10) and mean different things::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -23,6 +24,7 @@ from kicad_netspec.diff import NetlistDiff, diff_netlists
 from kicad_netspec.model import Netlist
 from kicad_netspec.ops.guard import guard as run_guard
 from kicad_netspec.oracle import Cli10Backend, EnvironmentError_, RuleReport, find_kicad_cli
+from kicad_netspec.report import check_report
 
 EXIT_OK = 0
 EXIT_VIOLATION = 1
@@ -92,6 +94,12 @@ def _parser() -> argparse.ArgumentParser:
 
     check = subs.add_parser("check", help="adjudicate a contract against the design")
     check.add_argument("contract", help="path to a contract, optionally 'file.py:name'")
+    check.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="text for a person, json for anything else (D2)",
+    )
     check.set_defaults(handler=_check)
 
     gate = subs.add_parser("gate", help="run ERC and DRC at every severity")
@@ -245,8 +253,12 @@ def _check(args: argparse.Namespace) -> int:
     source = Path(contract.resolve_source(spec, args.contract))
     netlist = Cli10Backend().netlist(source, variant=spec.variant)
     report = check_spec(spec, netlist)
-    print(f"{source}")
-    _print_check(report)
+
+    if getattr(args, "format", "text") == "json":
+        print(json.dumps(check_report(report), indent=2, sort_keys=False))
+    else:
+        print(f"{source}")
+        _print_check(report)
     return EXIT_OK if report.verdict == "pass" else EXIT_VIOLATION
 
 

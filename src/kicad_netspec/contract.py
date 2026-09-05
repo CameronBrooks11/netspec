@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import Any, ClassVar
 
 __all__ = [
     "Forbid",
@@ -56,6 +57,13 @@ class Rule:
     fail if either half is missing.
     """
 
+    kind: ClassVar[str] = ""
+    """Stable slug naming this rule type in the machine-readable report.
+
+    Deliberately not the class name: a report is a persisted artifact (D2) and a rename
+    in here must not silently re-key someone's stored report.
+    """
+
     def net_names(self) -> tuple[str, ...]:
         """Every net this rule names, in the words the contract used.
 
@@ -65,6 +73,19 @@ class Rule:
         Returning ``()`` is correct only for a rule that names no nets at all.
         """
         return ()
+
+    def describe(self) -> dict[str, Any]:
+        """This rule as JSON-safe data, for the report.
+
+        Must include ``subject``: the one thing the rule is about, which together with
+        ``kind`` identifies the assertion across runs. That identity is what lets two
+        reports be aligned so a *removed* assertion is distinguishable from an edited
+        one -- the objection D8 answers. Everything else in the returned mapping is the
+        rule's strength, and is expected to change when someone weakens it.
+
+        No tuples, no frozensets: this is serialised verbatim.
+        """
+        return {}
 
 
 @dataclass(frozen=True)
@@ -80,8 +101,13 @@ class Net(Rule):
     connection, and a stray connection is a short.
     """
 
+    kind: ClassVar[str] = "net"
+
     def net_names(self) -> tuple[str, ...]:
         return (self.name,)
+
+    def describe(self) -> dict[str, Any]:
+        return {"subject": self.name, "pins": list(self.pins), "exact": self.exact}
 
     def __str__(self) -> str:
         kind = "exactly" if self.exact else "at least"
@@ -103,8 +129,19 @@ class Polarity(Rule):
     minus_pin: str = "2"
     """KiCad's convention for two-pin polarised symbols. Override for parts that differ."""
 
+    kind: ClassVar[str] = "polarity"
+
     def net_names(self) -> tuple[str, ...]:
         return (self.plus, self.minus)
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "subject": self.ref,
+            "plus": self.plus,
+            "minus": self.minus,
+            "plus_pin": self.plus_pin,
+            "minus_pin": self.minus_pin,
+        }
 
     def __str__(self) -> str:
         return (
@@ -121,8 +158,15 @@ class Forbid(Rule):
 
     nets: tuple[str, ...]
 
+    kind: ClassVar[str] = "forbid"
+
     def net_names(self) -> tuple[str, ...]:
         return self.nets
+
+    def describe(self) -> dict[str, Any]:
+        # Sorted: forbid(A, B) and forbid(B, A) are the same assertion, and must not
+        # read as two different ones when two reports are aligned.
+        return {"subject": " | ".join(sorted(self.nets)), "nets": list(self.nets)}
 
     def __str__(self) -> str:
         return f"{' and '.join(self.nets)} must stay separate"

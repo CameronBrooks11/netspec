@@ -16,9 +16,9 @@ There is no fifth status for an indeterminate result, because connectivity is ex
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Literal, cast
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
+from typing import Any, Literal, cast
 
 from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Spec
 from kicad_netspec.model import Netlist
@@ -35,8 +35,15 @@ class CheckResult:
     """One rule, adjudicated."""
 
     rule: str
+    """The rendered sentence. What a person reads; not what a machine should parse."""
+
     status: Status
     detail: str = ""
+
+    data: Mapping[str, Any] = field(default_factory=dict)
+    """The rule as fields, from :meth:`Rule.describe`. Empty for a synthetic result that
+    corresponds to no rule -- a contract that asserted nothing, or a rule type with no
+    checker."""
 
     @property
     def green(self) -> bool:
@@ -134,7 +141,11 @@ def _adjudicate(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult
     """
     problems = resolved.problems_for(rule)
     if problems:
-        return CheckResult(rule=str(rule), status="fail", detail="; ".join(problems))
+        return CheckResult(
+            rule=str(rule), status="fail", detail="; ".join(problems), data=rule.describe()
+        )
+
+    described = {"kind": rule.kind, **rule.describe()}
 
     checker = CHECKERS.get(type(rule))
     if checker is None:
@@ -144,8 +155,12 @@ def _adjudicate(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult
             rule=str(rule),
             status="fail",
             detail=f"netspec has no way to check a {type(rule).__name__} rule",
+            data=described,
         )
-    return checker(rule, netlist, resolved)
+    # Attached here rather than in every checker: a checker that forgot would produce a
+    # result the report cannot key, and nothing would say so.
+    outcome = checker(rule, netlist, resolved)
+    return replace(outcome, data=described) if not outcome.data else outcome
 
 
 @checks(Net)
