@@ -20,7 +20,16 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
-from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Spec, Unknown
+from kicad_netspec.contract import (
+    Forbid,
+    Mirrors,
+    Net,
+    Polarity,
+    Rule,
+    Spec,
+    Through,
+    Unknown,
+)
 from kicad_netspec.model import Netlist
 from kicad_netspec.resolve import Resolved, resolve_spec
 
@@ -168,6 +177,91 @@ def _adjudicate(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult
     # result the report cannot key, and nothing would say so.
     outcome = checker(rule, netlist, resolved)
     return replace(outcome, data=described) if not outcome.data else outcome
+
+
+@checks(Through)
+def _check_through(rule: Through, netlist: Netlist, resolved: Resolved) -> CheckResult:
+    label = str(rule)
+    a, b = (resolved.net(n) or n for n in rule.nets)
+
+    missing = [
+        n
+        for n, found in zip(rule.nets, (a, b), strict=True)
+        if n not in netlist.nets and found not in netlist.nets
+    ]
+    if missing:
+        # A vanished net is how a short reads (see _check_forbid), and a bridge whose
+        # ends have merged has been shorted out rather than merely bypassed.
+        return CheckResult(
+            rule=label,
+            status="fail",
+            detail=f"{', '.join(missing)} is not in this design; the two ends may have merged",
+        )
+
+    on = {node.pin: netlist.net_of(rule.ref, node.pin) for node in netlist.nodes_of(rule.ref)}
+    if not on:
+        return CheckResult(rule=label, status="fail", detail=f"{rule.ref} is not in this design")
+
+    sits_on = set(on.values())
+    if not {a, b} <= sits_on:
+        return CheckResult(
+            rule=label,
+            status="fail",
+            detail=f"{rule.ref} sits on {', '.join(sorted(str(s) for s in sits_on))}, not on both",
+        )
+
+    if rule.only:
+        both = {n.ref for n in netlist.nets[a].nodes} & {n.ref for n in netlist.nets[b].nodes}
+        others = sorted(both - {rule.ref})
+        if others:
+            return CheckResult(
+                rule=label,
+                status="fail",
+                detail=(
+                    f"{', '.join(others)} also bridges {a} and {b}. A second path is legal "
+                    "wiring, so nothing else will report it."
+                ),
+            )
+    return CheckResult(rule=label, status="pass")
+
+
+@checks(Mirrors)
+def _check_mirrors(rule: Mirrors, netlist: Netlist, resolved: Resolved) -> CheckResult:
+    label = str(rule)
+    a, b = rule.parts
+
+    on_a = {n.pin: netlist.net_of(a, n.pin) for n in netlist.nodes_of(a)}
+    on_b = {n.pin: netlist.net_of(b, n.pin) for n in netlist.nodes_of(b)}
+    for ref, pins in ((a, on_a), (b, on_b)):
+        if not pins:
+            return CheckResult(rule=label, status="fail", detail=f"{ref} is not in this design")
+
+    if set(on_a) != set(on_b):
+        only_a = sorted(set(on_a) - set(on_b))
+        only_b = sorted(set(on_b) - set(on_a))
+        parts = [f"{a} has {', '.join(only_a)}"] if only_a else []
+        parts += [f"{b} has {', '.join(only_b)}"] if only_b else []
+        return CheckResult(rule=label, status="fail", detail="different pins: " + "; ".join(parts))
+
+    # The mapping each pin induces between the two parts' nets must be one-to-one, in
+    # both directions. A net shared by both channels maps to itself and is consistent.
+    forward: dict[str, str] = {}
+    backward: dict[str, str] = {}
+    for pin in sorted(on_a):
+        x, y = str(on_a[pin]), str(on_b[pin])
+        if forward.setdefault(x, y) != y:
+            return CheckResult(
+                rule=label,
+                status="fail",
+                detail=f"pin {pin}: {a} on {x} matches {forward[x]} elsewhere but {y} here",
+            )
+        if backward.setdefault(y, x) != x:
+            return CheckResult(
+                rule=label,
+                status="fail",
+                detail=f"pin {pin}: {b} on {y} matches {backward[y]} elsewhere but {x} here",
+            )
+    return CheckResult(rule=label, status="pass", detail=f"{len(forward)} nets paired")
 
 
 @checks(Unknown)

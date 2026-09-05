@@ -679,6 +679,52 @@ strictly *weaker* than the string check it replaced: an AST-only scan missed
 ``__import__("subprocess")``, which grep caught for free. It is now the union of both,
 with docstrings stripped so prose explaining why a module is safe does not trip it.
 
+## D25 — `through` and `mirrors`, the two primitives the real board asked for
+
+Both came out of running this project's own analysis over a real dual-channel motor
+controller, and neither exists in any of the 94 tools surveyed behind this project.
+
+**``through(a, ref, b)`` — a series part is the path, and by default the only path.** A
+fuse, a ferrite, a sense resistor, a net tie separating logic ground from power ground.
+Bypass one or parallel it and the netlist reads as perfectly ordinary: both nets exist,
+everything is connected, ERC is silent. ``only=True`` by default is what makes a star
+ground assertable — a second component across the same two nets is a ground loop, and it
+is legal wiring. Verified against the real board, where ``through("GND", "NT1",
+"GNDPWR")`` names its net tie and ``through("+12V", "U1", "+5V")`` finds the buck as the
+sole bridge between rails.
+
+**``mirrors(a, b)`` — two parts are wired to the same shape.** The design note behind this
+proposed a channel index and string surgery on net names (``LMD18500[12]`` → ``<CH>``).
+That is not needed and is not done. Two parts mirror when the pin-wise mapping between
+their nets is a **bijection**: each pin agrees about which net of the other part it
+corresponds to, and a net shared by both maps to itself. No index, no regex, no knowledge
+of how the board names its channels. It pairs all eleven pins of the real board's two
+drivers.
+
+**Both were prototyped against the real board before being written**, which is why they
+have the shapes they do, and both were then verified to *fail* on injected defects rather
+than only to pass on a good design:
+
+===================================  =======================================
+a second part bridges the grounds    ``R1 also bridges GND and GNDPWR``
+the tie is bypassed, grounds merge   ``GNDPWR is not in this design``
+one channel wired differently        ``pin 5: U3 on /DIR2 matches /DIR1
+                                     elsewhere but /PWM1 here``
+===================================  =======================================
+
+**``mirrors`` says little about two-pin parts**, and that is pinned by a test rather than
+left to be discovered. Any two of them with a distinct net on each pin induce a bijection,
+so they mirror — true, and nearly vacuous. It earns its keep on multi-pin parts. The pass
+detail reports how many nets were paired so a reader can see how much was checked.
+
+**What ``mirrors`` cannot see**: it compares two parts, so a block is several rules, and a
+change that leaves both instances equally wrong is invisible to it. Comparing two *sheet
+instances* wholesale would need a component correspondence between them, which is a
+matching problem this does not attempt.
+
+Both are symmetric in their arguments and key accordingly (D23): ``through(a, R, b)`` and
+``through(b, R, a)`` are one assertion, as are ``mirrors(x, y)`` and ``mirrors(y, x)``.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical

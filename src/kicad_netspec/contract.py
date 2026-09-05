@@ -34,12 +34,15 @@ from typing import Any, ClassVar
 
 __all__ = [
     "Forbid",
+    "Mirrors",
     "Net",
+    "Through",
     "Unknown",
     "Polarity",
     "Rule",
     "Spec",
     "forbid",
+    "mirrors",
     "net",
     "polarity",
 ]
@@ -195,6 +198,95 @@ class Forbid(Rule):
 
 
 @dataclass(frozen=True)
+class Through(Rule):
+    """Two nets are joined, and joined **through this part**.
+
+    The assertion for a series element that is meant to be the only path between two
+    nets: a fuse, a ferrite, a sense resistor, a net tie separating a logic ground from a
+    power ground. Bypassing one, or paralleling it, leaves a netlist that reads as
+    perfectly ordinary -- both nets exist, everything is connected, ERC is silent.
+
+    ``only=True`` by default, because that is what makes a star ground assertable: a
+    second component bridging the same two nets is a ground loop, and it is legal wiring.
+    Set it False where parts really do sit in parallel.
+    """
+
+    ref: str
+    nets: tuple[str, str]
+    only: bool = True
+
+    kind: ClassVar[str] = "through"
+
+    def __post_init__(self) -> None:
+        if self.nets[0] == self.nets[1]:
+            raise ValueError(f"through() needs two different nets, got {self.nets[0]!r} twice")
+        if not self.ref:
+            raise ValueError("through() needs a part to bridge them")
+
+    def net_names(self) -> tuple[str, ...]:
+        return self.nets
+
+    def describe(self) -> dict[str, Any]:
+        # Sorted, like forbid: "R bridges A and B" and "R bridges B and A" are one
+        # assertion and must not read as two when two reports are aligned.
+        ordered = sorted(self.nets)
+        return {
+            "subject": json.dumps([self.ref, *ordered]),
+            "part": self.ref,
+            "nets": ordered,
+            "only": self.only,
+        }
+
+    def __str__(self) -> str:
+        a, b = self.nets
+        sole = " and only through it" if self.only else ""
+        return f"{a} reaches {b} through {self.ref}{sole}"
+
+
+@dataclass(frozen=True)
+class Mirrors(Rule):
+    """Two parts are wired to the same shape.
+
+    For a design built from a repeated block -- a dual driver, a per-phase leg, a bank of
+    identical sensors -- this says the instances agree. It is the highest-leverage thing
+    a contract can say per character, because one line covers a whole channel.
+
+    Structural, not textual: the parts mirror when the pin-wise mapping between their
+    nets is a **bijection**. Pin 1 of each may sit on different nets, so long as every
+    pin agrees about which net of the other it corresponds to, and a net shared by both
+    (a common ground) maps to itself. That needs no channel index and no string surgery
+    on net names, which is what the first design of this rule was going to require.
+
+    It compares two *parts*. A block is several rules, one per corresponding pair; it
+    cannot see a change that leaves both instances equally wrong.
+
+    **It says little about two-pin parts.** Any two of them carrying a distinct net on
+    each pin induce a bijection, so they mirror -- a true statement that almost never
+    discriminates. The rule earns its keep on multi-pin parts, where there is a shape to
+    disagree about; the pass detail reports how many nets were paired, so a reader can
+    see how much was actually checked.
+    """
+
+    parts: tuple[str, str]
+
+    kind: ClassVar[str] = "mirrors"
+
+    def __post_init__(self) -> None:
+        if self.parts[0] == self.parts[1]:
+            raise ValueError(f"{self.parts[0]!r} always mirrors itself")
+
+    def net_names(self) -> tuple[str, ...]:
+        return ()
+
+    def describe(self) -> dict[str, Any]:
+        return {"subject": json.dumps(sorted(self.parts)), "parts": sorted(self.parts)}
+
+    def __str__(self) -> str:
+        a, b = self.parts
+        return f"{a} and {b} are wired to the same shape"
+
+
+@dataclass(frozen=True)
 class Unknown(Rule):
     """A rule this netspec has no vocabulary for, carried so it can be reported.
 
@@ -322,6 +414,16 @@ def polarity(
 def forbid(*nets: str) -> Forbid:
     """Assert two or more nets never merge."""
     return Forbid(nets=tuple(nets))
+
+
+def through(a: str, ref: str, b: str, *, only: bool = True) -> Through:
+    """Assert that ``a`` reaches ``b`` through ``ref``, and by default only through it."""
+    return Through(ref=ref, nets=(a, b), only=only)
+
+
+def mirrors(a: str, b: str) -> Mirrors:
+    """Assert two parts are wired to the same shape."""
+    return Mirrors(parts=(a, b))
 
 
 def load(path: str, *, attribute: str | None = None) -> Spec:
