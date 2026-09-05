@@ -1,0 +1,43 @@
+(kicad_sch
+  (version 20230409)
+  (generator "hand")
+  (uuid ad4d4285-3967-4de6-9fba-455a0f74d8ab)
+  (paper "A4")
+  (lib_symbols
+    (symbol "Device:R"
+      (pin_numbers (hide yes))
+      (pin_names (offset 0))
+      (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (property "Reference" "R" (at 2.032 0 90) (effects (font (size 1.27 1.27))))
+      (property "Value" "R" (at 0 0 90) (effects (font (size 1.27 1.27))))
+      (property "Footprint" "" (at -1.778 0 90) (effects (font (size 1.27 1.27)) (hide yes)))
+      (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+      (symbol "R_0_1"
+        (rectangle (start -1.016 -2.54) (end 1.016 2.54)
+          (stroke (width 0.254) (type default)) (fill (type none))))
+      (symbol "R_1_1"
+        (pin passive line (at 0 3.81 270) (length 1.27)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 0 -3.81 90) (length 1.27)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27))))))))
+  (hierarchical_label "IN" (shape input) (at 88.9 74.93 90)
+    (effects (font (size 1.27 1.27)) (justify left)) (uuid ef3f81f5-7e1e-4f6e-b340-dc2fee46dd86))
+  (hierarchical_label "SENSE" (shape output) (at 88.9 92.71 270)
+    (effects (font (size 1.27 1.27)) (justify left)) (uuid b5b1968c-f2ea-4295-b0c7-b01c9547f160))
+  (wire (pts (xy 88.9 74.93) (xy 88.9 80.01))
+    (stroke (width 0) (type default)) (uuid 6c3b3bd3-13b2-4d8c-9428-fa8024b49390))
+  (wire (pts (xy 88.9 87.63) (xy 88.9 92.71))
+    (stroke (width 0) (type default)) (uuid 08053643-8839-46ce-9e8a-cac7fce836cc))
+  (symbol (lib_id "Device:R") (at 88.9 83.82 0) (unit 1)
+    (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)
+    (uuid 91201dbb-1e9b-48b2-b2a4-d01d7d3c9b26)
+    (property "Reference" "R" (at 91.44 82.55 0) (effects (font (size 1.27 1.27)) (justify left)))
+    (property "Value" "1k" (at 91.44 85.09 0) (effects (font (size 1.27 1.27)) (justify left)))
+    (property "Footprint" "" (at 87.122 83.82 90) (effects (font (size 1.27 1.27)) (hide yes)))
+    (pin "1" (uuid 611a6689-1c62-4f25-acd2-8ecf860b036b))
+    (pin "2" (uuid 1d93951b-5a19-4ce3-981a-972ebe8ca9ff))
+    (instances
+      (project "hierarchy"
+        (path "/4e639a71-bb5f-49f7-b3b1-322774f9668c/b283b2bd-9e97-495b-aa5b-ecef00ba080f" (reference "R3") (unit 1))))))
