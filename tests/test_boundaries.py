@@ -125,3 +125,37 @@ def test_report_carries_no_tolerance() -> None:
             if word in lowered:
                 offenders.append((p.relative_to(SRC), word))
     assert not offenders, f"netspec has no tolerances; connectivity is exact: {offenders}"
+
+
+def test_every_rule_type_can_be_adjudicated() -> None:
+    """The invariant that used to rot silently: a rule with no checker.
+
+    Adding a primitive once meant editing six places, one of which (`Spec`'s isinstance
+    tuple) failed at import with a message naming nothing useful. A rule type registered
+    nowhere would previously have fallen through to `unsupported`, which is not green but
+    is also not the truth -- netspec knowing no way to check something is a defect in
+    netspec, not a limit of the backend.
+    """
+    from kicad_netspec.check import CHECKERS
+    from kicad_netspec.contract import Rule
+
+    unhandled = sorted(c.__name__ for c in Rule.__subclasses__() if c not in CHECKERS)
+    assert not unhandled, f"rule types with no checker: {unhandled}"
+
+
+def test_every_rule_type_declares_the_nets_it_names() -> None:
+    """Resolution runs over `net_names()`. A rule that forgets it silently resolves none.
+
+    That would not fail loudly -- it would skip the hierarchical and ambiguity handling
+    for that rule and quietly compare raw strings, which is the D19 bug all over again.
+    """
+    from kicad_netspec.contract import Forbid, Net, Polarity, Rule
+
+    expect = {Net: 1, Polarity: 2, Forbid: 2}
+    for kind in Rule.__subclasses__():
+        assert "net_names" in vars(kind), f"{kind.__name__} does not declare net_names()"
+
+    assert Net("N", ("a.1",)).net_names() == ("N",)
+    assert Polarity("C1", "VIN", "GND").net_names() == ("VIN", "GND")
+    assert Forbid(("A", "B")).net_names() == ("A", "B")
+    assert len(expect) <= len(Rule.__subclasses__())

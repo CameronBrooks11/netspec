@@ -223,3 +223,19 @@ def test_require_no_floating_pins_is_opt_in() -> None:
     assert check_spec(Spec(source="x", rules=rules), floating).verdict == "pass"
     strict = Spec(source="x", rules=rules, require_no_floating_pins=True)
     assert check_spec(strict, floating).verdict == "fail"
+
+
+def test_a_rule_type_with_no_checker_fails_rather_than_crashing() -> None:
+    """Defensive: the boundary test prevents this in-repo, but a Spec is user code."""
+    from dataclasses import dataclass
+
+    from kicad_netspec.contract import Rule
+
+    @dataclass(frozen=True)
+    class Invented(Rule):
+        def __str__(self) -> str:
+            return "something netspec has never heard of"
+
+    report = check_spec(Spec(source="x", rules=[Invented()]), _rail())
+    assert report.verdict == "fail"
+    assert "no way to check" in report.results[0].detail
