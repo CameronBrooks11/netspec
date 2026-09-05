@@ -403,6 +403,46 @@ Today's boards are small enough that the old cost was tolerable. It was linear p
 lookup, and the vocabulary being built on top of it — symmetry between repeated blocks,
 reachability, coverage over every pin — asks the question thousands of times.
 
+## D21 — Rule types register a checker; there is no dispatch chain
+
+Adding one primitive used to mean editing seven places: the dataclass, the constructor,
+the ``Rule`` union, an ``isinstance`` tuple inside ``Spec``, an import, an ``isinstance``
+branch in ``check``, and — after D19 — a fourth pattern-match in ``resolve``. Forgetting
+the ``isinstance`` tuple failed at import with ``not a rule``, naming nothing useful.
+Six primitives on that plan is thirty-odd edits of boilerplate, and the vocabulary this
+project is heading for has more than six.
+
+**``Rule`` is now a base class rather than a union**, so validation names no types and
+nothing has to be widened. **Checkers claim their rule type by decorator**, so dispatch is
+a dict lookup rather than a chain. Adding a primitive is a frozen dataclass and a
+``@checks`` function — verified by building one (a fanout limit) entirely *outside* the
+package, changing no existing line, and having both adjudication and resolution pick it
+up.
+
+**A rule reports the nets it names, and nothing else about itself.** ``net_names()`` lives
+on the rule because "which of my fields are net names" is a fact about the rule's shape,
+not about adjudication. That keeps ``contract.py`` free of any import from ``model`` or
+``check``, which matters more here than it usually would: a contract module is **user code
+that ``netspec check`` executes**, and it has no business reaching the machinery that
+judges it.
+
+**An unregistered rule type fails; it is not ``unsupported``.** D9 defines ``unsupported``
+as "this backend cannot evaluate this rule" — a statement about a *backend's* capability.
+netspec knowing no way to check something is a defect in netspec, and reporting it as a
+capability gap would launder a bug into a limitation. ``unsupported`` stays unreachable
+until backend capabilities reach the check layer, which is honest about where it stands.
+
+**Two boundary tests guard the halves**, because the failure mode is silence: a rule with
+no checker, and a rule that does not declare ``net_names()`` — the second would not fail
+loudly, it would skip hierarchical resolution for that rule and quietly compare raw
+strings, which is the D19 bug returning by the back door. Both guards were confirmed to
+actually fire against a deliberately broken rule rather than merely passing.
+
+Also removed here: ``Spec.nets``, ``Spec.polarities``, ``Spec.forbidden`` and
+``rules_of`` — four accessors with zero callers, each one an instance of the per-rule-type
+pattern that does not survive a real vocabulary, and each one a template an implementer
+would have copied.
+
 ## D14 — Name: `netspec`
 
 CLI and import-facing name is `netspec`, in the family idiom: `partspec` for mechanical

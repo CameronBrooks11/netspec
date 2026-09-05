@@ -16,14 +16,15 @@ There is no fifth status for an indeterminate result, because connectivity is ex
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Spec
 from kicad_netspec.model import Netlist
 from kicad_netspec.resolve import Resolved, resolve_spec
 
-__all__ = ["CheckReport", "CheckResult", "check_spec"]
+__all__ = ["CHECKERS", "CheckReport", "CheckResult", "check_spec", "checks"]
 
 Status = Literal["pass", "fail", "unsupported", "skipped"]
 Verdict = Literal["pass", "fail"]
@@ -79,6 +80,30 @@ class CheckReport:
         )
 
 
+# -- the rule registry -----------------------------------------------------------------
+#
+# One checker per rule type, claimed by decorator at import. Adding a primitive used to
+# mean editing six places, one of which -- a literal isinstance tuple in `Spec` -- failed
+# at import with "not a rule" and named nothing useful. Now the dataclass and the checker
+# below are the whole of it, and `test_boundaries` fails if either is missing.
+
+Checker = Callable[[Rule, Netlist, Resolved], CheckResult]
+CHECKERS: dict[type[Rule], Checker] = {}
+
+
+def checks[R: Rule](
+    kind: type[R],
+) -> Callable[[Callable[[R, Netlist, Resolved], CheckResult]], Checker]:
+    """Register the adjudicator for one rule type."""
+
+    def claim(fn: Callable[[R, Netlist, Resolved], CheckResult]) -> Checker:
+        registered = cast(Checker, fn)
+        CHECKERS[kind] = registered
+        return registered
+
+    return claim
+
+
 def check_spec(spec: Spec, netlist: Netlist) -> CheckReport:
     """Adjudicate every rule in ``spec`` against ``netlist``."""
     resolved = resolve_spec(spec, netlist)
@@ -110,19 +135,20 @@ def _adjudicate(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult
     problems = resolved.problems_for(rule)
     if problems:
         return CheckResult(rule=str(rule), status="fail", detail="; ".join(problems))
-    return _check_rule(rule, netlist, resolved)
+
+    checker = CHECKERS.get(type(rule))
+    if checker is None:
+        # Not `unsupported`: that means "this backend cannot evaluate this rule" (D9).
+        # netspec knowing no way to check something is a defect in netspec.
+        return CheckResult(
+            rule=str(rule),
+            status="fail",
+            detail=f"netspec has no way to check a {type(rule).__name__} rule",
+        )
+    return checker(rule, netlist, resolved)
 
 
-def _check_rule(rule: Rule, netlist: Netlist, resolved: Resolved) -> CheckResult:
-    if isinstance(rule, Net):
-        return _check_net(rule, netlist, resolved)
-    if isinstance(rule, Polarity):
-        return _check_polarity(rule, netlist, resolved)
-    if isinstance(rule, Forbid):
-        return _check_forbid(rule, netlist, resolved)
-    return CheckResult(rule=str(rule), status="unsupported", detail="unknown rule type")
-
-
+@checks(Net)
 def _check_net(rule: Net, netlist: Netlist, resolved: Resolved) -> CheckResult:
     label = str(rule)
 
@@ -159,6 +185,7 @@ def _check_net(rule: Net, netlist: Netlist, resolved: Resolved) -> CheckResult:
     return CheckResult(rule=label, status="pass")
 
 
+@checks(Polarity)
 def _check_polarity(rule: Polarity, netlist: Netlist, resolved: Resolved) -> CheckResult:
     label = (
         f"{rule.ref} polarity: pin {rule.plus_pin}->{rule.plus}, pin {rule.minus_pin}->{rule.minus}"
@@ -194,6 +221,7 @@ def _check_polarity(rule: Polarity, netlist: Netlist, resolved: Resolved) -> Che
     return CheckResult(rule=label, status="fail", detail=detail)
 
 
+@checks(Forbid)
 def _check_forbid(rule: Forbid, netlist: Netlist, resolved: Resolved) -> CheckResult:
     label = str(rule)
 

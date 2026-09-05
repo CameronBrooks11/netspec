@@ -42,8 +42,33 @@ __all__ = [
 ]
 
 
+class Rule:
+    """One assertion in a contract.
+
+    Rules are **pure data**. A rule declares what must be true and knows nothing about
+    netlists or about how it is checked; adjudication lives in
+    :mod:`kicad_netspec.check`, which registers one checker per rule type. That split is
+    load-bearing: a contract module is user code that ``netspec check`` executes, and it
+    has no business importing the machinery that judges it.
+
+    Adding a primitive is a frozen dataclass inheriting this, a constructor function
+    below, and a ``@checks`` handler in ``check.py``. Two tests in ``test_boundaries``
+    fail if either half is missing.
+    """
+
+    def net_names(self) -> tuple[str, ...]:
+        """Every net this rule names, in the words the contract used.
+
+        Resolution (D19) uses this to canonicalise a hierarchical name and to refuse an
+        ambiguous one *before* the rule runs. A rule that names nets and does not report
+        them here opts out of both, silently, and goes back to comparing raw strings.
+        Returning ``()`` is correct only for a rule that names no nets at all.
+        """
+        return ()
+
+
 @dataclass(frozen=True)
-class Net:
+class Net(Rule):
     """These pins, and by default *only* these pins, are on this net."""
 
     name: str
@@ -55,13 +80,16 @@ class Net:
     connection, and a stray connection is a short.
     """
 
+    def net_names(self) -> tuple[str, ...]:
+        return (self.name,)
+
     def __str__(self) -> str:
         kind = "exactly" if self.exact else "at least"
         return f"net {self.name} carries {kind} {', '.join(self.pins)}"
 
 
 @dataclass(frozen=True)
-class Polarity:
+class Polarity(Rule):
     """A polarised part is the right way round.
 
     Reversing an electrolytic capacitor, a diode or an LED is *legal wiring*: ERC has no
@@ -75,6 +103,9 @@ class Polarity:
     minus_pin: str = "2"
     """KiCad's convention for two-pin polarised symbols. Override for parts that differ."""
 
+    def net_names(self) -> tuple[str, ...]:
+        return (self.plus, self.minus)
+
     def __str__(self) -> str:
         return (
             f"{self.ref} pin {self.plus_pin} on {self.plus}, pin {self.minus_pin} on {self.minus}"
@@ -82,7 +113,7 @@ class Polarity:
 
 
 @dataclass(frozen=True)
-class Forbid:
+class Forbid(Rule):
     """These nets must never be the same net.
 
     The assertion for a short that would otherwise read as a perfectly ordinary net.
@@ -90,11 +121,11 @@ class Forbid:
 
     nets: tuple[str, ...]
 
+    def net_names(self) -> tuple[str, ...]:
+        return self.nets
+
     def __str__(self) -> str:
         return f"{' and '.join(self.nets)} must stay separate"
-
-
-Rule = Net | Polarity | Forbid
 
 
 @dataclass(frozen=True)
@@ -127,21 +158,9 @@ class Spec:
         if not self.source:
             raise ValueError("a Spec needs a source schematic")
         for rule in self.rules:
-            if not isinstance(rule, Net | Polarity | Forbid):
+            if not isinstance(rule, Rule):
                 raise TypeError(f"not a rule: {rule!r}")
         object.__setattr__(self, "rules", tuple(self.rules))
-
-    @property
-    def nets(self) -> tuple[Net, ...]:
-        return tuple(r for r in self.rules if isinstance(r, Net))
-
-    @property
-    def polarities(self) -> tuple[Polarity, ...]:
-        return tuple(r for r in self.rules if isinstance(r, Polarity))
-
-    @property
-    def forbidden(self) -> tuple[Forbid, ...]:
-        return tuple(r for r in self.rules if isinstance(r, Forbid))
 
     def __str__(self) -> str:
         return f"Spec({self.name or self.source}, {len(self.rules)} rules)"
@@ -219,8 +238,3 @@ def resolve_source(spec: Spec, contract_path: str | None = None) -> str:
         return str(source)
     base = Path(contract_path.partition(":")[0]).expanduser().resolve().parent
     return str((base / source).resolve())
-
-
-def rules_of(spec: Spec) -> Sequence[Rule]:
-    """Every rule in declaration order."""
-    return spec.rules

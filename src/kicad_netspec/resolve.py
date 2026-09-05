@@ -29,10 +29,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from kicad_netspec.contract import Forbid, Net, Polarity, Rule, Spec
+from kicad_netspec.contract import Rule, Spec
 from kicad_netspec.model import Netlist
 
-__all__ = ["Resolution", "Resolved", "find_nets", "net_names_of", "resolve_spec"]
+__all__ = ["Resolution", "Resolved", "find_nets", "resolve_spec"]
 
 
 def find_nets(netlist: Netlist, name: str) -> tuple[str, ...]:
@@ -91,24 +91,13 @@ class Resolved:
 
     def problems_for(self, rule: Rule) -> tuple[str, ...]:
         """Reasons this rule cannot be evaluated as written."""
-        seen = (self.by_name.get(n) for n in net_names_of(rule))
+        seen = (self.by_name.get(n) for n in rule.net_names())
         return tuple(r.problem for r in seen if r is not None and r.problem)
-
-
-def net_names_of(rule: Rule) -> tuple[str, ...]:
-    """Every net a rule names, in the words the contract used."""
-    if isinstance(rule, Net):
-        return (rule.name,)
-    if isinstance(rule, Polarity):
-        return (rule.plus, rule.minus)
-    if isinstance(rule, Forbid):
-        return rule.nets
-    return ()
 
 
 def resolve_spec(spec: Spec, netlist: Netlist) -> Resolved:
     """Resolve every net name in ``spec`` against ``netlist``, once."""
-    names = {name for rule in spec.rules for name in net_names_of(rule)}
+    names = {name for rule in spec.rules for name in rule.net_names()}
     return Resolved(
         by_name={name: Resolution(name, find_nets(netlist, name)) for name in sorted(names)}
     )
